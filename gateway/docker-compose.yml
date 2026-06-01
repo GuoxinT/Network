@@ -1,0 +1,17 @@
+services:
+  openvpn-gateway:
+    build: .
+    image: labvpn-openvpn-gateway:local
+    container_name: labvpn-openvpn-gateway
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./state:/app/state
+    environment:
+      PUID: "${PUID:-1002}"
+      PGID: "${PGID:-1002}"

@@ -1,0 +1,10 @@
+{
+  "server_host": "labvpn",
+  "server_port": 8388,
+  "method": "2022-blake3-aes-128-gcm",
+  "password": "CHANGE_ME_TO_A_RANDOM_16_BYTE_BASE64_KEY",
+  "timeout": 300,
+  "mode": "tcp_and_udp",
+  "profile_name": "SchoolVPN-iOS",
+  "remarks": "Use this profile in Shadowrocket on iOS. Do not share the password or ss URL."
+}

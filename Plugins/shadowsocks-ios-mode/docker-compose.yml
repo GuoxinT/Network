@@ -1,0 +1,12 @@
+services:
+  shadowsocks-ios:
+    build: .
+    image: schoolvpn-network:local
+    container_name: Network
+    restart: unless-stopped
+    ports:
+      - "8388:8388/tcp"
+      - "8388:8388/udp"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./state:/app/state

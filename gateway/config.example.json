@@ -1,0 +1,19 @@
+{
+  "server_host": "labvpn",
+  "listen_port": 1194,
+  "protocol": "udp",
+  "vpn_cidr": "10.66.0.0/24",
+  "client_dns": "223.5.5.5, 119.29.29.29",
+  "default_interface": "eth0",
+  "export_client": "phone",
+  "clients": [
+    {
+      "name": "phone",
+      "address": "10.66.0.2"
+    },
+    {
+      "name": "laptop",
+      "address": "10.66.0.3"
+    }
+  ]
+}

@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>School VPN</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #0d0f18;
+  --surface: #161925;
+  --card:    #1c2030;
+  --border:  #272d40;
+  --accent:  #6c63ff;
+  --green:   #2ed573;
+  --red:     #ff4757;
+  --yellow:  #ffa502;
+  --teal:    #00d4aa;
+  --text:    #e2e8f0;
+  --muted:   #8892a4;
+  --r:       10px;
+}
+body { background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; }
+
+.hidden { display: none !important; }
+
+input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 14px; padding: 10px 14px;
+  outline: none; transition: border .15s; width: 100%;
+}
+input:focus { border-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 14px; padding: 10px 14px;
+  outline: none; width: 100%;
+}
+
+.btn {
+  border: none; border-radius: 8px; cursor: pointer; font-size: 13px;
+  font-weight: 600; padding: 9px 18px; transition: opacity .15s;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.btn:hover    { opacity: .85; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-red    { background: var(--red);    color: #fff; }
+.btn-ghost  { background: var(--border); color: var(--muted); }
+.btn-sm     { padding: 6px 12px; font-size: 12px; }
+
+/* ── shared header ── */
+.app-header {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+}
+.logo-mark {
+  width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+}
+.logo-mark svg { width: 15px; height: 15px; stroke: #fff; fill: none;
+  stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.logo-text { font-size: 15px; font-weight: 700; }
+.logo-sub  { font-size: 11px; color: var(--muted); }
+.header-right { margin-left: auto; }
+
+.page-center {
+  display: flex; align-items: center; justify-content: center;
+  min-height: calc(100vh - 57px); padding: 24px 16px;
+}
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 22px; margin-bottom: 14px;
+}
+.card-label {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px;
+}
+.content-wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px; }
+
+/* ── user / login boxes ── */
+.user-box {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 36px 32px; width: 100%; max-width: 460px;
+}
+.user-icon {
+  width: 56px; height: 56px; border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), #9b59b6);
+  display: flex; align-items: center; justify-content: center; margin: 0 auto 20px;
+}
+.user-icon svg { width: 28px; height: 28px; stroke: #fff; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.user-title { font-size: 22px; font-weight: 700; text-align: center; margin-bottom: 4px; }
+.user-sub   { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 26px; }
+
+.key-row { display: flex; gap: 0; }
+.key-row input {
+  border-radius: 8px 0 0 8px; border-right: none;
+  font-family: monospace; font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
+}
+.key-row .btn { border-radius: 0 8px 8px 0; }
+.key-msg { font-size: 13px; margin-top: 10px; min-height: 20px; }
+
+.user-footer { text-align: center; margin-top: 20px; font-size: 12px; color: var(--muted); }
+.user-footer a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.user-footer a:hover { text-decoration: underline; }
+.request-box { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 18px; }
+.request-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.request-grid { display: grid; grid-template-columns: 1fr 140px auto; gap: 8px; }
+.request-msg { font-size: 13px; margin-top: 8px; min-height: 18px; color: var(--muted); }
+@media (max-width: 560px) {
+  .request-grid { grid-template-columns: 1fr; }
+}
+
+/* ── admin ── */
+.admin-login-box {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 32px; width: 100%; max-width: 400px;
+}
+.admin-login-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.admin-login-sub   { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+.admin-login-row   { display: flex; gap: 8px; }
+.admin-login-row input { flex: 1; }
+.admin-login-err { font-size: 13px; color: var(--red); margin-top: 8px; min-height: 18px; }
+
+.gen-row { display: flex; gap: 10px; }
+.gen-row input { flex: 1; }
+
+.keys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.keys-table th {
+  text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .6px;
+  border-bottom: 1px solid var(--border);
+}
+.keys-table td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.keys-table tr:last-child td { border-bottom: none; }
+.keys-table tr:hover td { background: rgba(255,255,255,.015); }
+.sort-btn {
+  appearance: none; background: transparent; border: 0; color: inherit;
+  cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0;
+  text-align: left; text-transform: inherit;
+}
+.sort-btn:hover { color: var(--text); }
+.sort-arrow { color: var(--accent); margin-left: 4px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.filter-btn {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 700;
+  padding: 7px 10px;
+}
+.filter-btn.active { border-color: var(--accent); color: var(--text); background: rgba(108,99,255,.12); }
+.inline-select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 12px; padding: 6px 8px; width: auto;
+}
+.health-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.health-cell { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 11px 12px; min-width: 0; }
+.health-label { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+.health-value { font-size: 13px; font-weight: 700; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) { .health-grid { grid-template-columns: 1fr 1fr; } }
+.key-empty { text-align: center; padding: 32px; color: var(--muted); font-size: 13px; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+}
+.badge-green { background: rgba(46,213,115,.12); color: var(--green); }
+.badge-muted { background: rgba(136,146,164,.1);  color: var(--muted); }
+
+.info-box { border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 10px; line-height: 1.5; }
+.info-box.ok  { background: rgba(46,213,115,.08); border: 1px solid rgba(46,213,115,.2);  color: var(--green); }
+.info-box.err { background: rgba(255,71,87,.08);  border: 1px solid rgba(255,71,87,.25); color: var(--red); }
+
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+  z-index: 10;
+}
+.modal-box {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  max-width: 420px; width: 100%; padding: 18px;
+}
+.modal-title { font-size: 16px; font-weight: 800; margin-bottom: 8px; }
+.modal-body { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+.fade-in { animation: fadeIn .2s; }
+
+/* ── dashboard ── */
+.dash-avatar {
+  width:44px; height:44px; border-radius:10px; flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent),#9b59b6);
+  display:flex; align-items:center; justify-content:center;
+}
+.dash-avatar svg { width:22px; height:22px; stroke:#fff; fill:none;
+  stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.s-row { display:flex; justify-content:space-between; align-items:center;
+  padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.s-row:last-child { border-bottom:none; padding-bottom:0; }
+.s-lbl { color:var(--muted); }
+.s-val { font-weight:500; }
+.conn-pill { display:inline-flex; align-items:center; gap:5px;
+  font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px; }
+.conn-pill.on  { background:rgba(46,213,115,.12); color:var(--green); }
+.conn-pill.off { background:rgba(136,146,164,.1);  color:var(--muted); }
+
+@keyframes pulse-dot {
+  0%,100% { box-shadow: 0 0 0 0 rgba(46,213,115,.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(46,213,115,0); }
+}
+.pulse-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+
+.speed-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+.speed-cell { background: var(--bg); border-radius: 8px; padding: 12px 8px; text-align: center; }
+.speed-cell-lbl {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px;
+}
+.speed-cell-val { font-size: 16px; font-weight: 700; }
+
+.dl-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: all .15s; color: inherit;
+  display: flex; flex-direction: row; align-items: center; gap: 14px;
+  padding: 14px 16px;
+}
+.dl-card:hover { border-color: var(--accent); background: rgba(108,99,255,.06); }
+.dl-card svg   { width: 28px; height: 28px; flex-shrink: 0; }
+
+/* terminal-style connection-log window */
+.term {
+  background: #0a0c14; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
+}
+.term-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; background: #11141f; border-bottom: 1px solid var(--border);
+}
+.term-dot { width: 11px; height: 11px; border-radius: 50%; }
+.term-title {
+  margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--muted);
+  letter-spacing: .4px;
+}
+.term-live {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 700; color: var(--green); text-transform: uppercase;
+}
+.term-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  line-height: 1.7; padding: 12px 14px; max-height: 240px; overflow-y: auto;
+}
+.log-line { display: flex; gap: 10px; white-space: nowrap; }
+.log-ts   { color: var(--muted); flex-shrink: 0; }
+.log-up   { color: var(--green); }
+.log-down { color: var(--muted); }
+.log-empty { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ SHARED HEADER ═══════════════ -->
+<header class="app-header">
+  <div class="logo-mark">
+    <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  </div>
+  <div>
+    <div class="logo-text">School VPN</div>
+    <div class="logo-sub" id="hdr-sub">School VPN</div>
+  </div>
+  <div class="header-right" id="hdr-right"></div>
+</header>
+
+<!-- ═══════════════ USER LOGIN ═══════════════ -->
+<div id="page-user" class="page-center fade-in">
+  <div class="user-box">
+    <div class="user-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
+    <div class="user-title">School VPN</div>
+    <div class="user-sub">Request access once. After admin approval this browser signs in automatically.</div>
+
+    <div class="key-msg" id="key-msg"></div>
+
+    <div class="request-box">
+      <div class="request-title">Request a key</div>
+      <div class="request-grid">
+        <input id="req-name" type="text" placeholder="Your name">
+        <select id="req-device">
+          <option value="iphone">iPhone</option>
+          <option value="android">Android</option>
+          <option value="mac">mac (Clash Verge)</option>
+          <option value="windows">windows (Clash Verge)</option>
+        </select>
+        <button class="btn btn-ghost" onclick="submitKeyRequest()">Apply</button>
+      </div>
+      <div class="request-msg" id="req-msg"></div>
+    </div>
+
+    <div class="user-footer">
+      Already approved on this browser? Refresh and it will sign in automatically. &nbsp;|&nbsp;
+      <a onclick="goAdmin()">Admin</a>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ USER DASHBOARD ═══════════════ -->
+<div id="page-dash" class="hidden fade-in">
+  <div class="content-wrap" style="max-width:620px">
+
+    <!-- identity -->
+    <div class="card" style="display:flex;align-items:center;gap:14px">
+      <div class="dash-avatar">
+        <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:16px;font-weight:700" id="dash-label">School VPN</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px" id="dash-device"></div>
+      </div>
+      <div id="dash-conn-pill"></div>
+    </div>
+
+    <!-- live throughput -->
+    <div class="card">
+      <div class="card-label">Live Throughput</div>
+      <div class="speed-grid">
+        <div class="speed-cell">
+          <div class="speed-cell-lbl">&#8595; Download</div>
+          <div class="speed-cell-val" style="color:var(--teal)" id="spd-rx">—</div>
+        </div>
+        <div class="speed-cell">
+          <div class="speed-cell-lbl">&#8593; Upload</div>
+          <div class="speed-cell-val" style="color:var(--accent)" id="spd-tx">—</div>
+        </div>
+        <div class="speed-cell">
+          <div class="speed-cell-lbl">&#9201; Duration</div>
+          <div class="speed-cell-val" id="spd-dur">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- seven-day usage -->
+    <div class="card">
+      <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span>Last 7 Days</span>
+        <span style="display:flex;gap:14px;align-items:center;font-weight:600;text-transform:none;letter-spacing:0">
+          <span style="color:var(--teal)">&#9679; Download</span>
+          <span style="color:var(--accent)">&#9679; Upload</span>
+          <span id="usage-total" style="color:var(--muted)"></span>
+        </span>
+      </div>
+      <canvas id="usage-chart" style="width:100%;height:150px;display:block"></canvas>
+    </div>
+
+    <!-- data flow + session -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="card" style="margin-bottom:0">
+        <div class="card-label">Data Flow (session)</div>
+        <div class="s-row"><span class="s-lbl">&#8595; Downloaded</span><span class="s-val" style="color:var(--teal)" id="flow-rx">—</span></div>
+        <div class="s-row"><span class="s-lbl">&#8593; Uploaded</span><span class="s-val" style="color:var(--accent)" id="flow-tx">—</span></div>
+      </div>
+      <div class="card" style="margin-bottom:0">
+        <div class="card-label">Session Info</div>
+        <div class="s-row"><span class="s-lbl">Current IP</span><span class="s-val" id="info-ip">—</span></div>
+        <div class="s-row"><span class="s-lbl">Activated</span><span class="s-val" id="info-since">—</span></div>
+      </div>
+    </div>
+    <div style="height:14px"></div>
+
+    <!-- connection log (live terminal window) -->
+    <div class="card">
+      <div class="card-label">Connection Log</div>
+      <div class="term">
+        <div class="term-bar">
+          <span class="term-dot" style="background:#ff5f57"></span>
+          <span class="term-dot" style="background:#febc2e"></span>
+          <span class="term-dot" style="background:#28c840"></span>
+          <span class="term-title">schoolvpn — tunnel events</span>
+          <span class="term-live"><span class="pulse-dot" style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span> live</span>
+        </div>
+        <div class="term-body" id="conn-log"><div class="log-empty">Waiting for tunnel activity…</div></div>
+      </div>
+    </div>
+
+    <!-- download -->
+    <div class="card">
+      <div class="card-label">Download Runner</div>
+      <div id="dl-card-body"></div>
+      <div id="dash-dl-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+    </div>
+
+    <!-- how to use -->
+    <div class="card">
+      <div class="card-label">How to use</div>
+      <div id="setup-guide-body"></div>
+    </div>
+
+    <!-- hotspot sharing -->
+    <div class="card">
+      <div class="card-label">Phone Hotspot</div>
+      <div class="s-row"><span class="s-lbl">1. Computer</span><span class="s-val">Turn on hotspot, then run the desktop runner</span></div>
+      <div class="s-row"><span class="s-lbl">2. Phone</span><span class="s-val">Connect to that hotspot</span></div>
+      <div class="s-row"><span class="s-lbl">3. Proxy</span><span class="s-val">Open the phone's Wi-Fi details, set proxy type to SOCKS/manual, then enter the Host and Port printed by the runner</span></div>
+      <div class="s-row"><span class="s-lbl">Host</span><span class="s-val">Use the computer LAN/hotspot IP printed by the runner, not 127.0.0.1</span></div>
+      <div class="s-row"><span class="s-lbl">Port</span><span class="s-val">1080</span></div>
+      <div class="s-row"><span class="s-lbl">Note</span><span class="s-val">If the phone cannot browse, check that it is connected to the computer hotspot and that the runner window is still open</span></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════ ADMIN PAGE ═══════════════ -->
+<div id="page-admin" class="hidden">
+
+  <div id="admin-login" class="page-center fade-in">
+    <div class="admin-login-box">
+      <div class="admin-login-title">Admin Login</div>
+      <div class="admin-login-sub">Enter your root key to manage verify-keys</div>
+      <div class="admin-login-row">
+        <input id="rk-input" type="password" placeholder="ROOT-…"
+               onkeydown="if(event.key==='Enter')doAdminLogin()">
+        <button class="btn btn-accent" onclick="doAdminLogin()">Login</button>
+      </div>
+      <div class="admin-login-err" id="admin-login-err"></div>
+    </div>
+  </div>
+
+  <div id="admin-dash" class="hidden fade-in">
+    <div class="content-wrap">
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+          <span>Health</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+        </div>
+        <div style="height:14px"></div>
+        <div id="diagnostics-wrap"><div class="key-empty">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+          <span>Pending Requests</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+        </div>
+        <div style="height:14px"></div>
+        <div id="requests-wrap"><div class="key-empty">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+          <span>User Management</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+        </div>
+        <div style="height:14px"></div>
+        <div id="user-filters" class="filter-row"></div>
+        <div style="height:10px"></div>
+        <div id="keys-wrap"><div class="key-empty">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Generate Verify Key</div>
+        <div class="gen-row">
+          <input id="gen-label" type="text" placeholder="Label — who is this for? (e.g. Alice's laptop)">
+          <button class="btn btn-accent" onclick="genKey()">+ Create</button>
+        </div>
+        <div id="gen-result"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+          <span>Destination Audit</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+        </div>
+        <div style="height:14px"></div>
+        <div id="analytics-wrap"><div class="key-empty">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="admin-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeAdminModal()">Cancel</button>
+      <button class="btn btn-red btn-sm" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+const DISPLAY_HOST = 'School VPN';
+let rootKey     = '';
+let verifiedKey = '';
+let requestTimer = null;
+let pendingIosLink = '';
+let pendingAndroidConfig = '';
+let pendingAndroidImport = '';
+let currentDevice = '';
+let currentMode = '';
+let adminUserCache = [];
+let adminFilter = 'all';
+let adminUserSort = {key: 'last_seen_at', dir: 'desc'};
+
+// ── util ──────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso + 'Z').toLocaleString('en-US',
+    {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+function fmtAgo(iso) {
+  if (!iso) return 'Never';
+  var t = new Date(iso + 'Z').getTime();
+  if (!t) return '—';
+  var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso + 'Z').toLocaleTimeString('en-US',
+    {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function fetchT(url, opts, ms) {
+  ms = ms || 8000;
+  return new Promise(function(res, rej) {
+    var t = setTimeout(function(){ rej(new Error('timeout')); }, ms);
+    fetch(url, opts || {}).then(
+      function(r){ clearTimeout(t); res(r); },
+      function(e){ clearTimeout(t); rej(e); }
+    );
+  });
+}
+function copyText(text, btn) {
+  function flash() {
+    var orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(function(){ btn.textContent = orig; }, 1500);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(function(){ prompt('Copy:', text); });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); flash(); } catch(e) { prompt('Copy:', text); }
+    document.body.removeChild(ta);
+  }
+}
+function fmtSpeed(bps) {
+  if (!bps)          return '0 B/s';
+  if (bps < 1024)    return bps.toFixed(0)        + ' B/s';
+  if (bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
+  return (bps/1048576).toFixed(2) + ' MB/s';
+}
+function fmtBytes(b) {
+  if (!b)             return '0 B';
+  if (b < 1024)       return b + ' B';
+  if (b < 1048576)    return (b/1024).toFixed(1)       + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1)    + ' MB';
+  return (b/1073741824).toFixed(2) + ' GB';
+}
+function fmtDur(sec) {
+  if (sec < 0) sec = 0;
+  var h = Math.floor(sec / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var s = sec % 60;
+  if (h > 0) return h + 'h ' + String(m).padStart(2,'0') + 'm';
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+// ── key input formatting ──────────────────────────────
+function fmtKey(input) {
+  var v = input.value.replace(/[^a-zA-Z0-9]/g,'').toUpperCase();
+  var out = '';
+  for (var i = 0; i < v.length && i < 16; i++) {
+    if (i && i % 4 === 0) out += '-';
+    out += v[i];
+  }
+  input.value = out;
+  document.getElementById('key-msg').innerHTML = '';
+  verifiedKey = '';
+}
+
+// ── page navigation ───────────────────────────────────
+function goAdmin() {
+  document.getElementById('page-user').classList.add('hidden');
+  document.getElementById('page-admin').classList.remove('hidden');
+  document.getElementById('hdr-right').innerHTML =
+    '<button class="btn btn-ghost btn-sm" onclick="goUser()">&#8592; Back</button>';
+  document.getElementById('hdr-sub').textContent = 'Admin · ' + DISPLAY_HOST;
+  if (rootKey) showAdminDash();
+  else document.getElementById('rk-input').focus();
+}
+function goUser() {
+  document.getElementById('page-admin').classList.add('hidden');
+  document.getElementById('page-user').classList.remove('hidden');
+  document.getElementById('hdr-right').innerHTML = '';
+  document.getElementById('hdr-sub').textContent = DISPLAY_HOST;
+}
+function goDash() {
+  document.getElementById('page-user').classList.add('hidden');
+  document.getElementById('page-dash').classList.remove('hidden');
+  document.getElementById('hdr-right').innerHTML =
+    '<button class="btn btn-ghost btn-sm" onclick="goUserFromDash()">&#8592; Back</button>';
+  document.getElementById('hdr-sub').textContent = DISPLAY_HOST;
+  renderDownload();
+  showIosLinkNotice();
+  showAndroidLinkNotice();
+  startStatusPoll();
+}
+function goUserFromDash() {
+  stopStatusPoll();
+  document.getElementById('page-dash').classList.add('hidden');
+  document.getElementById('page-user').classList.remove('hidden');
+  document.getElementById('hdr-right').innerHTML = '';
+  document.getElementById('key-msg').innerHTML = '';
+}
+
+// ══════════════════════════════════════════
+//  DASHBOARD — polls the server for live stats
+// ══════════════════════════════════════════
+var _statusTimer = null;
+
+function startStatusPoll() {
+  if (_statusTimer) return;
+  pollStatus();
+  _statusTimer = setInterval(pollStatus, 3000);
+}
+function stopStatusPoll() {
+  if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
+}
+
+// ── seven-day usage bars (plain canvas, server-persisted data) ──
+function drawUsageChart(rows) {
+  var c = document.getElementById('usage-chart');
+  if (!c || !c.clientWidth) return;
+  rows = rows || [];
+  var dpr = window.devicePixelRatio || 1;
+  var w = c.clientWidth, h = c.clientHeight || 150;
+  c.width = w * dpr; c.height = h * dpr;
+  var ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.strokeStyle = 'rgba(255,255,255,.05)'; ctx.lineWidth = 1;
+  for (var g = 1; g < 4; g++) {
+    var gy = 12 + (h - 34) * g / 4;
+    ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(w, gy + 0.5); ctx.stroke();
+  }
+
+  var maxVal = 1, total = 0, i;
+  for (i = 0; i < rows.length; i++) {
+    var sum = (rows[i].down || 0) + (rows[i].up || 0);
+    total += sum;
+    maxVal = Math.max(maxVal, sum);
+  }
+  var totalEl = document.getElementById('usage-total');
+  if (totalEl) totalEl.textContent = 'total ' + fmtBytes(total);
+
+  if (!rows.length) return;
+  var chartTop = 12, chartBottom = h - 24;
+  var chartH = chartBottom - chartTop;
+  var groupW = w / rows.length;
+  var barW = Math.min(22, Math.max(10, groupW * 0.28));
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var x = groupW * i + groupW / 2;
+    var downH = chartH * ((row.down || 0) / maxVal);
+    var upH = chartH * ((row.up || 0) / maxVal);
+    ctx.fillStyle = '#00d4aa';
+    ctx.fillRect(x - barW - 2, chartBottom - downH, barW, downH);
+    ctx.fillStyle = '#6c63ff';
+    ctx.fillRect(x + 2, chartBottom - upH, barW, upH);
+    ctx.fillStyle = 'rgba(255,255,255,.54)';
+    ctx.fillText((row.day || '').slice(5), x, h - 6);
+  }
+}
+
+window.addEventListener('resize', function () {
+  if (!document.getElementById('page-dash').classList.contains('hidden')) pollStatus();
+});
+
+async function pollStatus() {
+  try {
+    var headers = verifiedKey ? {'X-Verify-Key': verifiedKey} : {};
+    var r = await fetchT(API + '/api/user/status', {headers: headers}, 6000);
+    var d = await r.json();
+    if (!d.ok) {
+      // key was revoked or is locked to another machine — return to login
+      if (r.status === 401 || r.status === 403) {
+        goUserFromDash();
+        document.getElementById('key-msg').innerHTML =
+          '<span style="color:var(--red)">&#10007; ' + esc(d.error || 'Key no longer valid') + '</span>';
+      }
+      return;
+    }
+    renderStatus(d);
+  } catch(e) { /* transient network error — keep last view */ }
+}
+
+function renderStatus(d) {
+  var oldDevice = currentDevice;
+  var oldMode = currentMode;
+  currentDevice = d.device || currentDevice || '';
+  currentMode = d.mode || currentMode || '';
+  if (oldDevice !== currentDevice || oldMode !== currentMode) {
+    renderDownload();
+  }
+  showIosLinkNotice();
+  showAndroidLinkNotice(d.config_url, d.link);
+  // identity
+  document.getElementById('dash-label').textContent  = d.label || 'School VPN Access';
+  document.getElementById('dash-device').textContent =
+    (currentDevice ? currentDevice.toUpperCase() : 'DEVICE') + ' · key hidden';
+
+  // status pill
+  var pill = document.getElementById('dash-conn-pill');
+  pill.innerHTML = d.connected
+    ? '<span class="conn-pill on"><span class="pulse-dot" style="width:7px;height:7px;border-radius:50%;background:var(--green)"></span> Connected</span>'
+    : '<span class="conn-pill off">&#9675; Disconnected</span>';
+
+  // live throughput
+  document.getElementById('spd-rx').textContent = d.connected ? fmtSpeed(d.down_bps) : '—';
+  document.getElementById('spd-tx').textContent = d.connected ? fmtSpeed(d.up_bps)   : '—';
+  var dur = (d.connected && d.since) ? Math.floor((Date.now() - new Date(d.since + 'Z')) / 1000) : 0;
+  document.getElementById('spd-dur').textContent = d.connected ? fmtDur(dur) : '—';
+
+  // data flow
+  document.getElementById('flow-rx').textContent = fmtBytes(d.sess_down);
+  document.getElementById('flow-tx').textContent = fmtBytes(d.sess_up);
+
+  drawUsageChart(d.traffic_7d || []);
+
+  // session info
+  document.getElementById('info-ip').textContent    = d.current_ip || d.last_ip || d.activated_ip || '—';
+  document.getElementById('info-since').textContent = fmtDate(d.activated_at);
+
+  // connection log — newest first, console style
+  var log = document.getElementById('conn-log');
+  var ip  = d.current_ip || d.last_ip || d.activated_ip || 'this device';
+  if (!d.log || !d.log.length) {
+    if (d.mode === 'ios_shadowrocket' || d.mode === 'android_clash' || d.mode === 'desktop_clash') {
+      var mobileName = d.mode === 'ios_shadowrocket' ? 'iOS Shadowrocket'
+        : (d.mode === 'android_clash' ? 'Android Clash Meta' : 'Clash Verge');
+      log.innerHTML = '<div class="log-empty">'
+        + (d.connected ? '$ ' + mobileName + ' service is running. Seven-day usage is stored on the server.'
+                       : '$ ' + mobileName + ' service is not running on the server.')
+        + '</div>';
+      return;
+    }
+    log.innerHTML = '<div class="log-empty">'
+      + (d.connected ? '$ tunnel is up — waiting for the next event…'
+                     : '$ no tunnel activity yet — run your runner to connect.')
+      + '</div>';
+  } else {
+    log.innerHTML = d.log.map(function(e) {
+      var up = e.event === 'up';
+      return '<div class="log-line">' +
+        '<span class="log-ts">' + fmtTime(e.t) + '</span>' +
+        '<span class="' + (up ? 'log-up' : 'log-down') + '">' +
+          (up ? '● tunnel established  ' + esc(ip)
+              : '○ tunnel closed       ' + esc(ip)) +
+        '</span>' +
+      '</div>';
+    }).join('');
+  }
+}
+
+// ── download card (OS-detected) ───────────────────────
+function renderDownload() {
+  var body  = document.getElementById('dl-card-body');
+  var guide = document.getElementById('setup-guide-body');
+  if (!body) return;
+
+  var ua    = navigator.userAgent;
+  var isWin = ua.includes('Windows');
+  var isMac = (ua.includes('Macintosh') || ua.includes('Mac OS X')) && !isWin;
+  var device = currentDevice || (isMac ? 'mac' : (isWin ? 'windows' : 'windows'));
+
+  var SH_ICO  = '<circle cx="12" cy="12" r="10"/><path d="M12 8v8M9 14l3 3 3-3"/>';
+  var WIN_ICO = '<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>';
+  var CLASH_ICO = '<path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/>';
+
+  function dlRow(fn, ico, title, sub, badge) {
+    return '<div class="dl-card" onclick="' + fn + '">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+        'stroke-linecap="round" stroke-linejoin="round">' + ico + '</svg>' +
+      '<div style="flex:1">' +
+        '<strong style="font-size:14px">' + title + '</strong>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + sub + '</div>' +
+      '</div>' +
+      '<span style="font-size:11px;font-weight:700;color:var(--green);white-space:nowrap">' + badge + '</span>' +
+    '</div>';
+  }
+  function codeTag(s) {
+    return '<code style="background:var(--bg);padding:1px 5px;border-radius:4px;font-size:12px">' + s + '</code>';
+  }
+  function guideRow(lbl, val) {
+    return '<div class="s-row"><span class="s-lbl">' + lbl + '</span><span class="s-val">' + val + '</span></div>';
+  }
+
+  if (device === 'iphone' || currentMode === 'ios_shadowrocket') {
+    body.innerHTML = '<div class="info-box ok">Your iPhone profile is approved. Use the Shadowrocket button below; no verify-key is shown on this page.</div>';
+    guide.innerHTML =
+      guideRow('1. Open', 'Tap Open in Shadowrocket below') +
+      guideRow('2. Select', 'Choose the SchoolVPN-iOS node in Shadowrocket') +
+      guideRow('3. Route', 'Use Proxy / Global Proxy first while testing') +
+      guideRow('4. Watch', 'The seven-day usage chart updates from server-side traffic data');
+  } else if (device === 'android' || currentMode === 'android_clash') {
+    body.innerHTML = '<div class="info-box ok">Your Android Clash Meta profile is approved. Import the subscription below; no verify-key is shown on this page.</div>';
+    guide.innerHTML =
+      guideRow('1. Install', 'Open Clash Meta / Mihomo on Android') +
+      guideRow('2. Import', 'Use the install button or copy the subscription URL below') +
+      guideRow('3. Select', 'Choose the SchoolVPN-Android profile and proxy node') +
+      guideRow('4. Route', 'Use Global mode first while testing, then adjust rules if needed');
+  } else if (device === 'windows') {
+    body.innerHTML =
+      dlRow("showAndroidLinkNotice()", CLASH_ICO,
+        'Clash Verge subscription', 'Import the managed profile URL into Clash Verge', 'Recommended') +
+      '<div style="height:8px"></div>' +
+      dlRow("downloadRunner('win')", WIN_ICO,
+        'Windows Runner (.bat)', 'SSH script fallback if Clash Verge is unavailable', 'Fallback');
+    guide.innerHTML =
+      guideRow('1. Install', 'Open Clash Verge on Windows') +
+      guideRow('2. Import', 'Copy the subscription URL below into Profiles / Subscriptions') +
+      guideRow('3. Select', 'Choose the SchoolVPN-ClashVerge profile and node') +
+      guideRow('4. Route', 'Use Global mode first while testing') +
+      guideRow('Fallback', 'The SSH runner remains available if Clash Verge cannot be used');
+  } else if (device === 'mac') {
+    body.innerHTML =
+      dlRow("showAndroidLinkNotice()", CLASH_ICO,
+        'Clash Verge subscription', 'Import the managed profile URL into Clash Verge', 'Recommended') +
+      '<div style="height:8px"></div>' +
+      dlRow("downloadRunner('mac')", SH_ICO,
+        'macOS Runner (.sh)', 'SSH script fallback if Clash Verge is unavailable', 'Fallback');
+    guide.innerHTML =
+      guideRow('1. Install', 'Open Clash Verge on macOS') +
+      guideRow('2. Import', 'Copy the subscription URL below into Profiles / Subscriptions') +
+      guideRow('3. Select', 'Choose the SchoolVPN-ClashVerge profile and node') +
+      guideRow('4. Route', 'Use Global mode first while testing') +
+      guideRow('Fallback', 'The SSH runner remains available if Clash Verge cannot be used');
+  } else {
+    body.innerHTML =
+      dlRow("downloadRunner('mac')", SH_ICO, 'macOS Runner (.sh)', 'Built-in ssh — no Python', 'macOS') +
+      dlRow("downloadRunner('win')", WIN_ICO, 'Windows Runner (.bat)', 'Built-in ssh.exe — no Python', 'Windows');
+    guide.innerHTML =
+      guideRow('macOS', codeTag('chmod +x schoolvpn.sh &amp;&amp; ./schoolvpn.sh')) +
+      guideRow('Windows', 'Double-click ' + codeTag('schoolvpn.bat')) +
+      guideRow('Phone hotspot', 'Use the Host/Port printed by the desktop runner as phone SOCKS proxy');
+  }
+}
+
+function showIosLinkNotice(link) {
+  if (link) pendingIosLink = link;
+  if (!pendingIosLink) {
+    try { pendingIosLink = localStorage.getItem('labvpn_ios_link') || ''; } catch(e) {}
+  }
+  if (!pendingIosLink) return;
+  var msg = document.getElementById('dash-dl-msg');
+  if (!msg) return;
+  msg.innerHTML =
+    '<div class="info-box ok">iOS Shadowrocket link is ready. ' +
+    '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(pendingIosLink) + '&quot;,this)">Copy link</button> ' +
+    '<a class="btn btn-accent btn-sm" href="' + esc(pendingIosLink) + '">Open in Shadowrocket</a>' +
+    '<div style="margin-top:8px;color:var(--muted);line-height:1.55">After importing, select the <strong>SchoolVPN-iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.</div></div>';
+}
+
+function showAndroidLinkNotice(configUrl, importUrl) {
+  if (configUrl) pendingAndroidConfig = configUrl;
+  if (importUrl) pendingAndroidImport = importUrl;
+  if (!pendingAndroidConfig) {
+    try {
+      pendingAndroidConfig = localStorage.getItem('labvpn_android_config') || '';
+      pendingAndroidImport = localStorage.getItem('labvpn_android_import') || '';
+    } catch(e) {}
+  }
+  if (!pendingAndroidConfig) return;
+  var msg = document.getElementById('dash-dl-msg');
+  if (!msg) return;
+  var isDesktopClash = currentMode === 'desktop_clash' || currentDevice === 'mac' || currentDevice === 'windows';
+  var appName = isDesktopClash ? 'Clash Verge' : 'Android Clash Meta';
+  var profileName = isDesktopClash ? 'SchoolVPN-ClashVerge' : 'SchoolVPN-Android';
+  var openBtn = pendingAndroidImport
+    ? '<a class="btn btn-accent btn-sm" href="' + esc(pendingAndroidImport) + '">Open in ' + appName + '</a> '
+    : '';
+  msg.innerHTML =
+    '<div class="info-box ok">' + appName + ' profile is ready. ' +
+    openBtn +
+    '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(pendingAndroidConfig) + '&quot;,this)">Copy subscription URL</button>' +
+    '<div style="margin-top:8px;color:var(--muted);line-height:1.55">In ' + appName + ', import this URL as a remote profile, select <strong>' + profileName + '</strong>, and use <strong>Global</strong> mode first while testing. If a site does not load and the usage bars stay flat, the device is still using another profile or Direct routing.</div></div>';
+}
+
+// ══════════════════════════════════════════
+//  USER — verify & download
+// ══════════════════════════════════════════
+async function verifyKey() {
+  var msg = document.getElementById('key-msg');
+  msg.innerHTML = '<span style="color:var(--muted)">Keys are hidden now. Please apply with your name and device, then keep this page open for approval.</span>';
+}
+
+function stopRequestPoll() {
+  if (requestTimer) { clearInterval(requestTimer); requestTimer = null; }
+}
+
+async function submitKeyRequest() {
+  var name = document.getElementById('req-name').value.trim();
+  var device = document.getElementById('req-device').value;
+  var msg = document.getElementById('req-msg');
+  if (!name) {
+    msg.innerHTML = '<span style="color:var(--red)">Enter your name first.</span>';
+    return;
+  }
+  stopRequestPoll();
+  msg.textContent = 'Submitting request…';
+  try {
+    var r = await fetchT(API + '/api/request-key', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, device: device}),
+    }, 8000);
+    var d = await r.json();
+    if (!d.ok) {
+      msg.innerHTML = '<span style="color:var(--red)">' + esc(d.error || 'Request failed') + '</span>';
+      return;
+    }
+    try { localStorage.setItem('labvpn_request_id', d.request_id); } catch(e) {}
+    msg.innerHTML = 'Request sent. Waiting for admin approval…';
+    pollKeyRequest(d.request_id);
+    requestTimer = setInterval(function(){ pollKeyRequest(d.request_id); }, 3000);
+  } catch(e) {
+    msg.innerHTML = '<span style="color:var(--red)">Request failed: ' + esc(e.message) + '</span>';
+  }
+}
+
+async function pollKeyRequest(rid) {
+  var msg = document.getElementById('req-msg');
+  try {
+    var r = await fetchT(API + '/api/request-key/' + encodeURIComponent(rid), {}, 6000);
+    var d = await r.json();
+    if (!d.ok) return;
+    if (d.status === 'approved' && (d.approved || d.key)) {
+      stopRequestPoll();
+      try {
+        localStorage.removeItem('labvpn_request_id');
+        if (d.link) localStorage.setItem('labvpn_ios_link', d.link);
+        if (d.config_url) localStorage.setItem('labvpn_android_config', d.config_url);
+        if (d.config_url && d.link) localStorage.setItem('labvpn_android_import', d.link);
+      } catch(e) {}
+      if (d.config_url) {
+        pendingAndroidConfig = d.config_url;
+        pendingAndroidImport = d.link || '';
+      } else if (d.link) {
+        pendingIosLink = d.link;
+      }
+      msg.innerHTML = '<span style="color:var(--green)">Approved. Signing in…</span>';
+      goDash();
+      if (d.config_url) showAndroidLinkNotice(d.config_url, d.link);
+      else if (d.link) showIosLinkNotice(d.link);
+    } else if (d.status === 'approved' && d.link) {
+      stopRequestPoll();
+      try { localStorage.removeItem('labvpn_request_id'); } catch(e) {}
+      msg.innerHTML =
+        '<span style="color:var(--green)">Approved.</span> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(d.link) + '&quot;,this)">Copy link</button> ' +
+        '<a class="btn btn-accent btn-sm" href="' + esc(d.link) + '">Open in Shadowrocket</a>';
+    } else if (d.status === 'rejected') {
+      stopRequestPoll();
+      try { localStorage.removeItem('labvpn_request_id'); } catch(e) {}
+      msg.innerHTML = '<span style="color:var(--red)">Request rejected. Ask your admin.</span>';
+    } else {
+      msg.textContent = 'Waiting for admin approval…';
+    }
+  } catch(e) {
+    msg.textContent = 'Waiting for admin approval…';
+  }
+}
+
+async function downloadRunner(platform) {
+  var msg = document.getElementById('dash-dl-msg');
+  msg.innerHTML = '<span style="color:var(--muted)">Preparing download…</span>';
+  try {
+    var headers = verifiedKey ? {'X-Verify-Key': verifiedKey} : {};
+    var r = await fetchT(API + '/api/runner/' + platform, {headers: headers}, 15000);
+    if (!r.ok) {
+      msg.innerHTML = '<span style="color:var(--red)">&#10007; ' + esc(await r.text()) + '</span>';
+      return;
+    }
+    var blob = await r.blob();
+    var ext  = platform === 'mac' ? '.sh' : '.bat';
+    var a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = 'schoolvpn' + ext;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    msg.innerHTML = '<span style="color:var(--green)">&#10003; Download started</span>';
+  } catch(e) {
+    msg.innerHTML = '<span style="color:var(--red)">Download failed: ' + esc(e.message) + '</span>';
+  }
+}
+
+// ══════════════════════════════════════════
+//  ADMIN
+// ══════════════════════════════════════════
+async function doAdminLogin() {
+  var key = document.getElementById('rk-input').value.trim();
+  var err = document.getElementById('admin-login-err');
+  if (!key) return;
+  err.textContent = 'Checking…';
+  try {
+    var r = await fetchT(API + '/api/admin/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({root_key: key}),
+    });
+    var d = await r.json();
+    if (d.ok) {
+      rootKey = key;
+      try { localStorage.setItem('labvpn_root_key', key); } catch(e) {}
+      err.textContent = '';
+      showAdminDash();
+    }
+    else      { err.textContent = 'Invalid root key.'; }
+  } catch(e) {
+    err.textContent = 'Error: ' + e.message;
+  }
+}
+
+function showAdminDash() {
+  document.getElementById('admin-login').classList.add('hidden');
+  document.getElementById('admin-dash').classList.remove('hidden');
+  document.getElementById('hdr-right').innerHTML =
+    '<button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="goUser()">&#8592; Back</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="adminLogout()">Log out</button>';
+  loadKeys();
+}
+
+function adminLogout() {
+  rootKey = '';
+  try { localStorage.removeItem('labvpn_root_key'); } catch(e) {}
+  document.getElementById('admin-dash').classList.add('hidden');
+  document.getElementById('admin-login').classList.remove('hidden');
+  document.getElementById('rk-input').value = '';
+  document.getElementById('admin-login-err').textContent = '';
+}
+
+async function genKey() {
+  var label  = document.getElementById('gen-label').value.trim();
+  var result = document.getElementById('gen-result');
+  result.innerHTML = '<span style="color:var(--muted);font-size:13px">Generating…</span>';
+  try {
+    var r = await fetchT(API + '/api/admin/keys', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({root_key: rootKey, label: label}),
+    });
+    var d = await r.json();
+    if (d.ok) {
+      document.getElementById('gen-label').value = '';
+      result.innerHTML =
+        '<div class="info-box ok">New key: <strong style="font-family:monospace;letter-spacing:1px">' +
+        esc(d.key) + '</strong>' +
+        '&nbsp;<button class="btn btn-ghost btn-sm" onclick="copyText(\'' + esc(d.key) + '\',this)">Copy</button></div>';
+      loadKeys();
+    } else {
+      result.innerHTML = '<div class="info-box err">' + esc(d.error || 'Failed') + '</div>';
+    }
+  } catch(e) {
+    result.innerHTML = '<div class="info-box err">' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadKeys() {
+  var wrap = document.getElementById('keys-wrap');
+  var reqWrap = document.getElementById('requests-wrap');
+  var diagWrap = document.getElementById('diagnostics-wrap');
+  try {
+    var r = await fetchT(API + '/api/admin/keys', {headers: {'X-Root-Key': rootKey}});
+    var d = await r.json();
+    if (!d.ok) {
+      wrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
+      if (reqWrap) reqWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
+      if (diagWrap) diagWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
+      return;
+    }
+    renderRequests(d.requests || {});
+    renderDiagnostics((d.analytics || {}).diagnostics || {});
+    adminUserCache = d.users || [];
+    renderUsers();
+    renderAnalytics(d.analytics || {});
+  } catch(e) {
+    wrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
+    if (reqWrap) reqWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
+    if (diagWrap) diagWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
+  }
+}
+
+var adminAnalyticsCache = null;
+var adminTrafficSort = {key: 'total', dir: 'desc'};
+
+function modeLabel(mode) {
+  return mode === 'ios_shadowrocket' ? 'Shadowrocket'
+    : (mode === 'android_clash' ? 'Clash Meta'
+      : (mode === 'desktop_clash' ? 'Clash Verge' : 'SSH runner'));
+}
+function deviceLabel(device) {
+  return device === 'iphone' ? 'iPhone'
+    : (device === 'android' ? 'Android'
+      : (device === 'mac' ? 'mac' : (device === 'windows' ? 'windows' : device || '—')));
+}
+function renderDiagnostics(diag) {
+  var wrap = document.getElementById('diagnostics-wrap');
+  if (!wrap) return;
+  function statusCell(label, ok, detail) {
+    return '<div class="health-cell"><div class="health-label">' + label + '</div>' +
+      '<div class="health-value" style="color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' +
+      (ok ? '&#9679; OK' : '&#9679; Check') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+      esc(detail || '') + '</div></div>';
+  }
+  wrap.innerHTML = '<div class="health-grid">' +
+    statusCell('Flask', diag.flask_online, 'listening :5000 ' + (diag.flask_listening_5000 ? 'yes' : 'unknown')) +
+    statusCell('Network', diag.shadowsocks_running, diag.container_status || diag.container || '') +
+    statusCell('8388 Ports', diag.tcp_udp_8388_exposed, 'tcp/udp exposed') +
+    statusCell('Profiles', diag.ss_config_exists, 'last pull ' + fmtAgo(diag.profile_last_request_at)) +
+    '<div class="health-cell"><div class="health-label">Users</div><div class="health-value">' + esc(diag.key_count || 0) + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">approved keys</div></div>' +
+    '<div class="health-cell"><div class="health-label">Pending</div><div class="health-value">' + esc(diag.pending_requests || 0) + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">requests waiting</div></div>' +
+    '<div class="health-cell"><div class="health-label">Server Time</div><div class="health-value">' + fmtDate(diag.server_time) + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">UTC source</div></div>' +
+    '<div class="health-cell"><div class="health-label">Config</div><div class="health-value">' + (diag.ss_config_exists ? 'Present' : 'Missing') + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">Shadowsocks JSON</div></div>' +
+    '</div>' +
+    '<div style="height:12px"></div>' +
+    '<div class="term"><div class="term-body">' +
+      '<div class="log-line"><span class="log-ts">clients</span><span class="log-down">' +
+        esc((diag.recent_clients || []).map(function(e){ return e.ip + ' ' + e.path + ' ' + e.status; }).join(' | ') || 'No recent client events') +
+      '</span></div>' +
+      '<div class="log-line"><span class="log-ts">errors</span><span class="log-down">' +
+        esc((diag.recent_errors || []).map(function(e){ return e.ip + ' ' + e.path + ' ' + e.status; }).join(' | ') || 'No recent API errors') +
+      '</span></div>' +
+    '</div></div>';
+}
+function setAdminFilter(filter) {
+  adminFilter = filter;
+  renderUsers();
+}
+function setUserSort(key) {
+  if (adminUserSort.key === key) {
+    adminUserSort.dir = adminUserSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    adminUserSort.key = key;
+    adminUserSort.dir = key === 'label' ? 'asc' : 'desc';
+  }
+  renderUsers();
+}
+function userHead(key, label) {
+  var arrow = adminUserSort.key === key
+    ? '<span class="sort-arrow">' + (adminUserSort.dir === 'asc' ? '&#9650;' : '&#9660;') + '</span>'
+    : '';
+  return '<th><button class="sort-btn" onclick="setUserSort(&quot;' + key + '&quot;)">' + label + arrow + '</button></th>';
+}
+function filterUsers(users) {
+  return users.filter(function(u) {
+    if (adminFilter === 'all') return true;
+    if (adminFilter === 'active') return !!u.activated;
+    if (adminFilter === 'unused') return !u.activated;
+    if (adminFilter === 'clash') return u.mode === 'android_clash' || u.mode === 'desktop_clash';
+    if (adminFilter === 'ssh') return u.mode === 'ssh_runner';
+    return u.device === adminFilter;
+  });
+}
+function sortUsers(users) {
+  var key = adminUserSort.key;
+  var dir = adminUserSort.dir === 'asc' ? 1 : -1;
+  return users.slice().sort(function(a, b) {
+    var av = a[key], bv = b[key];
+    if (key === 'label' || key === 'device' || key === 'mode' || key === 'last_seen_at') {
+      av = String(av || '').toLowerCase();
+      bv = String(bv || '').toLowerCase();
+    } else {
+      av = Number(av || 0);
+      bv = Number(bv || 0);
+    }
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return String(a.label || a.key || '').localeCompare(String(b.label || b.key || ''));
+  });
+}
+function subscriptionForUser(u) {
+  return u.config_url || u.shadowrocket_url || '';
+}
+function renderUsers() {
+  var wrap = document.getElementById('keys-wrap');
+  var filters = document.getElementById('user-filters');
+  if (!wrap || !filters) return;
+  var options = [
+    ['all', 'All'], ['active', 'Active'], ['unused', 'Unused'],
+    ['clash', 'Clash'], ['ssh', 'SSH'], ['iphone', 'iPhone'],
+    ['android', 'Android'], ['mac', 'mac'], ['windows', 'windows']
+  ];
+  filters.innerHTML = options.map(function(o) {
+    return '<button class="filter-btn ' + (adminFilter === o[0] ? 'active' : '') +
+      '" onclick="setAdminFilter(&quot;' + o[0] + '&quot;)">' + o[1] + '</button>';
+  }).join('');
+  var rows = sortUsers(filterUsers(adminUserCache || []));
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="key-empty">No users match this filter.</div>';
+    return;
+  }
+  wrap.innerHTML =
+    '<table class="keys-table"><thead><tr>' +
+      userHead('label', 'User') + userHead('device', 'Device') + userHead('mode', 'Mode') +
+      userHead('total', '7d Traffic') + userHead('last_seen_at', 'Last Active') +
+      '<th>IP Audit</th><th>Subscription</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(function(u) {
+      var sub = subscriptionForUser(u);
+      var status = u.activated
+        ? '<span class="badge badge-green">&#9679; Active</span>'
+        : '<span class="badge badge-muted">&#9675; Unused</span>';
+      var subCell = sub
+        ? '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(sub) + '&quot;,this)">Copy URL</button>'
+        : '<span style="color:var(--muted);font-size:12px">' + esc(u.profile_error || '—') + '</span>';
+      return '<tr>' +
+        '<td><strong>' + esc(u.label || '—') + '</strong><br>' +
+          '<span style="font-family:monospace;font-size:11px;color:var(--muted)">' + esc(u.key) + '</span> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(u.key) + '&quot;,this)">Copy</button></td>' +
+        '<td>' + esc(deviceLabel(u.device)) + '<br>' + status + '</td>' +
+        '<td>' + esc(modeLabel(u.mode)) + '</td>' +
+        '<td><span style="color:var(--teal)">' + fmtBytes(u.down || 0) + '</span><br>' +
+          '<span style="color:var(--accent)">' + fmtBytes(u.up || 0) + '</span><br>' +
+          '<strong>' + fmtBytes(u.total || 0) + '</strong></td>' +
+        '<td>' + esc(fmtAgo(u.last_seen_at)) + '<br><span style="font-size:11px;color:var(--muted)">' + fmtDate(u.last_seen_at) + '</span></td>' +
+        '<td style="font-size:12px;color:var(--muted)">First: ' + esc(u.activated_ip || '—') +
+          '<br>Last: ' + esc(u.last_ip || '—') + '<br>' + esc(u.ip_count || 0) + ' IP(s)</td>' +
+        '<td>' + subCell + '</td>' +
+        '<td><button class="btn btn-red btn-sm" onclick="confirmRevoke(&quot;' + esc(u.key) + '&quot;,&quot;' + esc(u.label || '') + '&quot;,&quot;' + esc(u.device || '') + '&quot;)">Revoke</button></td>' +
+      '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+function setTrafficSort(key) {
+  if (adminTrafficSort.key === key) {
+    adminTrafficSort.dir = adminTrafficSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    adminTrafficSort.key = key;
+    adminTrafficSort.dir = key === 'user' ? 'asc' : 'desc';
+  }
+  if (adminAnalyticsCache) renderAnalytics(adminAnalyticsCache);
+}
+
+function renderRequests(requests) {
+  var wrap = document.getElementById('requests-wrap');
+  if (!wrap) return;
+  var entries = Object.entries(requests).filter(function(kv) {
+    return (kv[1].status || 'pending') === 'pending';
+  });
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="key-empty">No pending requests.</div>';
+    return;
+  }
+    wrap.innerHTML =
+      '<table class="keys-table"><thead><tr>' +
+      '<th>Name</th><th>Type</th><th>Device</th><th>IP</th><th>Requested</th><th></th>' +
+    '</tr></thead><tbody>' +
+    entries.map(function(kv) {
+      var rid = kv[0], info = kv[1];
+      var kind = info.kind === 'ios_shadowrocket' ? 'iOS Shadowrocket'
+        : (info.kind === 'android_clash' ? 'Android Clash Meta'
+          : (info.kind === 'desktop_clash' ? 'Clash Verge' : 'Verify key'));
+      function deviceOption(v, label) {
+        return '<option value="' + v + '"' + (info.device === v ? ' selected' : '') + '>' + label + '</option>';
+      }
+      var deviceSelect = '<select class="inline-select" id="req-device-' + esc(rid) + '" onchange="updateRequestDevice(&quot;' + esc(rid) + '&quot;,this.value)">' +
+        deviceOption('iphone', 'iPhone') + deviceOption('android', 'Android') +
+        deviceOption('mac', 'mac') + deviceOption('windows', 'windows') + '</select>';
+      return '<tr>' +
+        '<td>' + esc(info.name || '—') + '</td>' +
+        '<td><span class="badge badge-muted">' + esc(kind) + '</span></td>' +
+        '<td>' + deviceSelect + '</td>' +
+        '<td style="font-size:12px;color:var(--muted)">' + esc(info.client_ip || '—') + '</td>' +
+        '<td style="font-size:12px;color:var(--muted)">' + fmtDate(info.created_at) + '</td>' +
+        '<td>' +
+          '<button class="btn btn-accent btn-sm" style="margin-right:6px" onclick="approveRequest(&quot;' + esc(rid) + '&quot;,this)">Approve</button>' +
+          '<button class="btn btn-red btn-sm" onclick="rejectRequest(&quot;' + esc(rid) + '&quot;,this)">Reject</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('') +
+    '</tbody></table>';
+}
+
+function renderAnalytics(analytics) {
+  var wrap = document.getElementById('analytics-wrap');
+  if (!wrap) return;
+  analytics = analytics || {};
+  adminAnalyticsCache = analytics;
+  var traffic = analytics.traffic || {};
+  var mobile = analytics.mobile_audit || {};
+  var users = traffic.top_users || [];
+  var targets = mobile.top_targets || [];
+  var flagged = mobile.flagged || [];
+  var events = mobile.events || [];
+
+  function sortedTrafficUsers() {
+    var key = adminTrafficSort.key;
+    var dir = adminTrafficSort.dir === 'asc' ? 1 : -1;
+    return users.slice().sort(function(a, b) {
+      var av, bv;
+      if (key === 'user') {
+        av = String(a.label || a.key || '').toLowerCase();
+        bv = String(b.label || b.key || '').toLowerCase();
+      } else {
+        av = Number(a[key] || 0);
+        bv = Number(b[key] || 0);
+      }
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return String(a.label || a.key || '').localeCompare(String(b.label || b.key || ''));
+    });
+  }
+  function trafficHead(key, label) {
+    var arrow = adminTrafficSort.key === key
+      ? '<span class="sort-arrow">' + (adminTrafficSort.dir === 'asc' ? '&#9650;' : '&#9660;') + '</span>'
+      : '';
+    return '<th><button class="sort-btn" onclick="setTrafficSort(&quot;' + key + '&quot;)">' + label + arrow + '</button></th>';
+  }
+  function miniUser(row) {
+    return '<tr>' +
+      '<td>' + esc(row.label || row.key || '—') + '<br><span style="font-size:11px;color:var(--muted)">' +
+        esc(row.device || '—') + ' · ' + esc(row.last_ip || '—') + '</span></td>' +
+      '<td style="color:var(--teal)">' + fmtBytes(row.down || 0) + '</td>' +
+      '<td style="color:var(--accent)">' + fmtBytes(row.up || 0) + '</td>' +
+      '<td>' + fmtBytes(row.total || 0) + '</td>' +
+    '</tr>';
+  }
+  function targetRow(row) {
+    var ports = (row.ports || []).map(function(p){ return esc(p[0]) + '×' + esc(p[1]); }).join(', ');
+    var labels = (row.labels || []).map(function(p){ return esc(p[0]) + '×' + esc(p[1]); }).join(', ');
+    return '<tr>' +
+      '<td style="font-family:monospace;font-size:12px">' + esc(row.target || '—') + '</td>' +
+      '<td>' + esc(row.count || 0) + '</td>' +
+      '<td style="color:var(--muted)">' + (ports || '—') + '</td>' +
+      '<td style="color:var(--muted)">' + (labels || '—') + '</td>' +
+    '</tr>';
+  }
+  function eventLine(e) {
+    return '<div class="log-line">' +
+      '<span class="log-ts">' + fmtTime(e.time) + '</span>' +
+      '<span class="log-down">' + esc(e.label || e.client_ip || 'unknown') + ' -> ' +
+        esc(e.target || '—') + ':' + esc(e.port || '') + '</span>' +
+    '</div>';
+  }
+
+  wrap.innerHTML =
+    '<div class="speed-grid">' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">7d Total</div><div class="speed-cell-val">' + fmtBytes(traffic.total || 0) + '</div></div>' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">Download</div><div class="speed-cell-val" style="color:var(--teal)">' + fmtBytes(traffic.total_down || 0) + '</div></div>' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">Upload</div><div class="speed-cell-val" style="color:var(--accent)">' + fmtBytes(traffic.total_up || 0) + '</div></div>' +
+    '</div>' +
+    '<div style="height:14px"></div>' +
+    '<div class="info-box">Clash-based iPhone/Android/mac/windows traffic goes through the Network container, so destination hints come from mobile proxy logs. SSH runner fallback traffic remains destination-blind.</div>' +
+    '<div style="height:14px"></div>' +
+    '<div class="card-label">Mobile Proxy Destinations</div>' +
+    (targets.length
+      ? '<table class="keys-table"><thead><tr><th>Target</th><th>Hits</th><th>Ports</th><th>Users</th></tr></thead><tbody>' + targets.map(targetRow).join('') + '</tbody></table>'
+      : '<div class="key-empty">No mobile destination log entries yet.</div>') +
+    '<div style="height:14px"></div>' +
+    '<div class="card-label">Flagged Destination Hints</div>' +
+    (flagged.length
+      ? '<div class="term"><div class="term-body">' + flagged.map(eventLine).join('') + '</div></div>'
+      : '<div class="key-empty">No keyword flags in recent mobile proxy logs.</div>') +
+    '<div style="height:14px"></div>' +
+    '<div class="card-label">Recent Mobile Proxy Events</div>' +
+    (events.length
+      ? '<div class="term"><div class="term-body">' + events.slice(0, 20).map(eventLine).join('') + '</div></div>'
+      : '<div class="key-empty">No recent mobile proxy events.</div>');
+}
+
+async function updateRequestDevice(rid, device) {
+  try {
+    await fetchT(API + '/api/admin/requests/' + encodeURIComponent(rid), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json', 'X-Root-Key': rootKey},
+      body: JSON.stringify({device: device}),
+    }, 8000);
+    loadKeys();
+  } catch(e) {
+    alert('Update failed: ' + e.message);
+  }
+}
+
+async function approveRequest(rid, btn) {
+  btn.disabled = true;
+  try {
+    var sel = document.getElementById('req-device-' + rid);
+    var body = sel ? {device: sel.value} : {};
+    var r = await fetchT(API + '/api/admin/requests/' + encodeURIComponent(rid) + '/approve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Root-Key': rootKey},
+      body: JSON.stringify(body),
+    }, 12000);
+    var d = await r.json();
+    if (!d.ok) alert('Error: ' + (d.error || 'Approve failed'));
+    loadKeys();
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function rejectRequest(rid, btn) {
+  openAdminModal('Reject request', 'This pending request will be marked rejected. The user will need to apply again if this was a mistake.', 'Reject', function() {
+    btn.disabled = true;
+    fetchT(API + '/api/admin/requests/' + encodeURIComponent(rid), {
+      method: 'DELETE', headers: {'X-Root-Key': rootKey},
+    }, 8000).then(loadKeys).catch(function(e) {
+      alert('Error: ' + e.message);
+      btn.disabled = false;
+    });
+  });
+}
+
+function openAdminModal(title, body, confirmText, onConfirm) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = body;
+  var btn = document.getElementById('modal-confirm');
+  btn.textContent = confirmText || 'Confirm';
+  btn.onclick = function() {
+    closeAdminModal();
+    onConfirm();
+  };
+  document.getElementById('admin-modal').classList.remove('hidden');
+}
+function closeAdminModal() {
+  document.getElementById('admin-modal').classList.add('hidden');
+}
+function confirmRevoke(kid, label, device) {
+  openAdminModal(
+    'Revoke access',
+    '<strong>' + esc(label || kid) + '</strong><br>Device: ' + esc(deviceLabel(device)) +
+    '<br><br>This deletes the verify key, removes SSH authorization, and invalidates the user dashboard cookie/subscription.',
+    'Revoke',
+    function(){ revokeKey(kid); }
+  );
+}
+
+async function revokeKey(kid) {
+  try {
+    await fetchT(API + '/api/admin/keys/' + encodeURIComponent(kid), {
+      method: 'DELETE', headers: {'X-Root-Key': rootKey},
+    });
+    loadKeys();
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════
+//  Restore session on page load (no re-login on refresh)
+// ══════════════════════════════════════════
+(function restoreSession() {
+  var savedKey, savedRoot, savedRequest;
+  try {
+    savedKey = localStorage.getItem('labvpn_key');
+    savedRoot = localStorage.getItem('labvpn_root_key');
+    savedRequest = localStorage.getItem('labvpn_request_id');
+  } catch(e) {
+    savedKey = null;
+    savedRoot = null;
+    savedRequest = null;
+  }
+
+  if (savedRoot) {
+    fetchT(API + '/api/admin/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({root_key: savedRoot}),
+    }, 6000)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { rootKey = savedRoot; }
+        else { try { localStorage.removeItem('labvpn_root_key'); } catch(e) {} }
+      })
+      .catch(function() { /* offline — keep saved root for next load */ });
+  }
+
+  if (savedRequest) {
+    pollKeyRequest(savedRequest);
+    requestTimer = setInterval(function(){ pollKeyRequest(savedRequest); }, 3000);
+  }
+
+  if (savedKey) {
+    fetchT(API + '/api/validate-key', {headers: {'X-Verify-Key': savedKey}}, 6000)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        try { localStorage.removeItem('labvpn_key'); } catch(e) {}
+        if (d.ok) { goDash(); }
+      })
+      .catch(function() {});
+    return;
+  }
+
+  fetchT(API + '/api/user/status', {}, 6000)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { goDash(); renderStatus(d); }
+    })
+    .catch(function() { /* offline — leave on login screen */ });
+})();
+</script>
+</body>
+</html>

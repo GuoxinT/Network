@@ -1,0 +1,26 @@
+# ── Secrets (never commit) ───────────────────────────────────────────────
+# Root key, verify keys, request records, device metadata, IP audit history
+keys.json
+# Per-user ed25519 SSH keypairs for mac/windows runner mode
+keys/
+# Live Shadowsocks credentials (commit config.example.json instead)
+Plugins/shadowsocks-ios-mode/config.json
+gateway/config.json
+
+# ── Runtime / generated data ─────────────────────────────────────────────
+*.sqlite3
+*.log
+server.log
+# Container runtime state (generated ssserver.json, etc.)
+Plugins/shadowsocks-ios-mode/state/
+gateway/state/
+
+# ── Local editor / Claude config ─────────────────────────────────────────
+.claude/settings.local.json
+
+# ── Python / OS cruft ────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
