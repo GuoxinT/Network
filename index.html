@@ -432,7 +432,7 @@ select {
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
           <span>Health</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
         </div>
         <div style="height:14px"></div>
         <div id="diagnostics-wrap"><div class="key-empty">Loading…</div></div>
@@ -441,7 +441,7 @@ select {
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
           <span>Pending Requests</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
         </div>
         <div style="height:14px"></div>
         <div id="requests-wrap"><div class="key-empty">Loading…</div></div>
@@ -450,7 +450,7 @@ select {
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
           <span>User Management</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
         </div>
         <div style="height:14px"></div>
         <div id="user-filters" class="filter-row"></div>
@@ -470,7 +470,7 @@ select {
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
           <span>Destination Audit</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys()">&#8635; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
         </div>
         <div style="height:14px"></div>
         <div id="analytics-wrap"><div class="key-empty">Loading…</div></div>
@@ -595,7 +595,9 @@ function fmtKey(input) {
 
 // ── page navigation ───────────────────────────────────
 function goAdmin() {
+  stopStatusPoll();
   document.getElementById('page-user').classList.add('hidden');
+  document.getElementById('page-dash').classList.add('hidden');
   document.getElementById('page-admin').classList.remove('hidden');
   document.getElementById('hdr-right').innerHTML =
     '<button class="btn btn-ghost btn-sm" onclick="goUser()">&#8592; Back</button>';
@@ -604,13 +606,18 @@ function goAdmin() {
   else document.getElementById('rk-input').focus();
 }
 function goUser() {
+  stopStatusPoll();
+  stopAdminPoll();
   document.getElementById('page-admin').classList.add('hidden');
+  document.getElementById('page-dash').classList.add('hidden');
   document.getElementById('page-user').classList.remove('hidden');
   document.getElementById('hdr-right').innerHTML = '';
   document.getElementById('hdr-sub').textContent = DISPLAY_HOST;
 }
 function goDash() {
+  stopAdminPoll();
   document.getElementById('page-user').classList.add('hidden');
+  document.getElementById('page-admin').classList.add('hidden');
   document.getElementById('page-dash').classList.remove('hidden');
   document.getElementById('hdr-right').innerHTML =
     '<button class="btn btn-ghost btn-sm" onclick="goUserFromDash()">&#8592; Back</button>';
@@ -636,7 +643,7 @@ var _statusTimer = null;
 function startStatusPoll() {
   if (_statusTimer) return;
   pollStatus();
-  _statusTimer = setInterval(pollStatus, 3000);
+  _statusTimer = setInterval(pollStatus, 1000);
 }
 function stopStatusPoll() {
   if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
@@ -690,8 +697,98 @@ function drawUsageChart(rows) {
   }
 }
 
+function drawAdminHourlyTrafficChart(rows) {
+  var c = document.getElementById('admin-hourly-chart');
+  if (!c || !c.clientWidth) return;
+  rows = rows || [];
+  var dpr = window.devicePixelRatio || 1;
+  var w = c.clientWidth, h = c.clientHeight || 220;
+  c.width = w * dpr; c.height = h * dpr;
+  var ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  var padL = 46, padR = 12, padT = 16, padB = 30;
+  var chartW = Math.max(1, w - padL - padR);
+  var chartH = Math.max(1, h - padT - padB);
+  var maxVal = 1;
+  for (var i = 0; i < rows.length; i++) {
+    maxVal = Math.max(maxVal, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+  }
+
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1;
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,.48)';
+  for (var g = 0; g <= 4; g++) {
+    var gy = padT + chartH * g / 4;
+    ctx.beginPath(); ctx.moveTo(padL, gy + 0.5); ctx.lineTo(w - padR, gy + 0.5); ctx.stroke();
+    var labelVal = maxVal * (1 - g / 4);
+    ctx.fillText(fmtBytes(labelVal), padL - 8, gy + 4);
+  }
+
+  if (!rows.length) return;
+  function point(i, val) {
+    var x = padL + chartW * (rows.length === 1 ? 0 : i / (rows.length - 1));
+    var y = padT + chartH * (1 - Math.max(0, val) / maxVal);
+    return [x, y];
+  }
+
+  var grad = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+  grad.addColorStop(0, 'rgba(0,212,170,.22)');
+  grad.addColorStop(1, 'rgba(0,212,170,0)');
+
+  ctx.beginPath();
+  for (i = 0; i < rows.length; i++) {
+    var p = point(i, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+    if (i === 0) ctx.moveTo(p[0], p[1]);
+    else ctx.lineTo(p[0], p[1]);
+  }
+  var last = point(rows.length - 1, rows[rows.length - 1].total || 0);
+  var first = point(0, rows[0].total || 0);
+  ctx.lineTo(last[0], padT + chartH);
+  ctx.lineTo(first[0], padT + chartH);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  for (i = 0; i < rows.length; i++) {
+    p = point(i, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+    if (i === 0) ctx.moveTo(p[0], p[1]);
+    else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.strokeStyle = '#00d4aa';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(108,99,255,.65)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (i = 0; i < rows.length; i++) {
+    p = point(i, rows[i].up || 0);
+    if (i === 0) ctx.moveTo(p[0], p[1]);
+    else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,.54)';
+  var tickEvery = 24;
+  for (i = 0; i < rows.length; i += tickEvery) {
+    p = point(i, 0);
+    var d = new Date((rows[i].hour || '') + 'Z');
+    var label = isNaN(d.getTime()) ? (rows[i].hour || '').slice(5, 10) : d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+    ctx.fillText(label, p[0], h - 9);
+  }
+}
+
 window.addEventListener('resize', function () {
   if (!document.getElementById('page-dash').classList.contains('hidden')) pollStatus();
+  if (!document.getElementById('page-admin').classList.contains('hidden') && adminAnalyticsCache) {
+    drawAdminHourlyTrafficChart(((adminAnalyticsCache.traffic || {}).hourly_7d || {}).hours || []);
+  }
 });
 
 async function pollStatus() {
@@ -720,7 +817,7 @@ function renderStatus(d) {
   if (oldDevice !== currentDevice || oldMode !== currentMode) {
     renderDownload();
   }
-  showIosLinkNotice();
+  showIosLinkNotice(d.shadowrocket_url || d.link);
   showAndroidLinkNotice(d.config_url, d.link);
   // identity
   document.getElementById('dash-label').textContent  = d.label || 'School VPN Access';
@@ -758,7 +855,7 @@ function renderStatus(d) {
         : (d.mode === 'android_clash' ? 'Android Clash Meta' : 'Clash Verge');
       log.innerHTML = '<div class="log-empty">'
         + (d.connected ? '$ ' + mobileName + ' service is running. Seven-day usage is stored on the server.'
-                       : '$ ' + mobileName + ' service is not running on the server.')
+                       : '$ ' + mobileName + ' is ready. No recent proxy traffic has reached this user port.')
         + '</div>';
       return;
     }
@@ -865,7 +962,10 @@ function renderDownload() {
 }
 
 function showIosLinkNotice(link) {
-  if (link) pendingIosLink = link;
+  if (link) {
+    pendingIosLink = link;
+    try { localStorage.setItem('labvpn_ios_link', link); } catch(e) {}
+  }
   if (!pendingIosLink) {
     try { pendingIosLink = localStorage.getItem('labvpn_ios_link') || ''; } catch(e) {}
   }
@@ -1017,6 +1117,19 @@ async function downloadRunner(platform) {
 // ══════════════════════════════════════════
 //  ADMIN
 // ══════════════════════════════════════════
+var _adminTimer = null;
+var _adminLoading = false;
+var _adminPending = false;
+
+function startAdminPoll() {
+  if (_adminTimer) return;
+  loadKeys();
+  _adminTimer = setInterval(loadKeys, 3000);
+}
+function stopAdminPoll() {
+  if (_adminTimer) { clearInterval(_adminTimer); _adminTimer = null; }
+}
+
 async function doAdminLogin() {
   var key = document.getElementById('rk-input').value.trim();
   var err = document.getElementById('admin-login-err');
@@ -1047,10 +1160,11 @@ function showAdminDash() {
   document.getElementById('hdr-right').innerHTML =
     '<button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="goUser()">&#8592; Back</button>' +
     '<button class="btn btn-ghost btn-sm" onclick="adminLogout()">Log out</button>';
-  loadKeys();
+  startAdminPoll();
 }
 
 function adminLogout() {
+  stopAdminPoll();
   rootKey = '';
   try { localStorage.removeItem('labvpn_root_key'); } catch(e) {}
   document.getElementById('admin-dash').classList.add('hidden');
@@ -1076,7 +1190,7 @@ async function genKey() {
         '<div class="info-box ok">New key: <strong style="font-family:monospace;letter-spacing:1px">' +
         esc(d.key) + '</strong>' +
         '&nbsp;<button class="btn btn-ghost btn-sm" onclick="copyText(\'' + esc(d.key) + '\',this)">Copy</button></div>';
-      loadKeys();
+      loadKeys(true);
     } else {
       result.innerHTML = '<div class="info-box err">' + esc(d.error || 'Failed') + '</div>';
     }
@@ -1085,7 +1199,13 @@ async function genKey() {
   }
 }
 
-async function loadKeys() {
+async function loadKeys(force) {
+  if (_adminLoading) {
+    if (force) _adminPending = true;
+    return;
+  }
+  _adminLoading = true;
+  _adminPending = false;
   var wrap = document.getElementById('keys-wrap');
   var reqWrap = document.getElementById('requests-wrap');
   var diagWrap = document.getElementById('diagnostics-wrap');
@@ -1093,6 +1213,7 @@ async function loadKeys() {
     var r = await fetchT(API + '/api/admin/keys', {headers: {'X-Root-Key': rootKey}});
     var d = await r.json();
     if (!d.ok) {
+      stopAdminPoll();
       wrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
       if (reqWrap) reqWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
       if (diagWrap) diagWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">Auth error</div>';
@@ -1107,6 +1228,11 @@ async function loadKeys() {
     wrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
     if (reqWrap) reqWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
     if (diagWrap) diagWrap.innerHTML = '<div class="key-empty" style="color:var(--red)">' + esc(e.message) + '</div>';
+  } finally {
+    _adminLoading = false;
+    if (_adminPending && !document.getElementById('page-admin').classList.contains('hidden')) {
+      loadKeys();
+    }
   }
 }
 
@@ -1232,7 +1358,10 @@ function renderUsers() {
         ? '<span class="badge badge-green">&#9679; Active</span>'
         : '<span class="badge badge-muted">&#9675; Unused</span>';
       var subCell = sub
-        ? '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(sub) + '&quot;,this)">Copy URL</button>'
+        ? '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(sub) + '&quot;,this)">Copy URL</button>' +
+          (u.private_vpn
+            ? '<br><span style="font-size:11px;color:var(--teal)">private VPN port ' + esc(u.private_vpn_port || '—') + '</span>'
+            : (u.ss_port ? '<br><span style="font-size:11px;color:var(--muted)">port ' + esc(u.ss_port) + '</span>' : ''))
         : '<span style="color:var(--muted);font-size:12px">' + esc(u.profile_error || '—') + '</span>';
       return '<tr>' +
         '<td><strong>' + esc(u.label || '—') + '</strong><br>' +
@@ -1308,6 +1437,7 @@ function renderAnalytics(analytics) {
   analytics = analytics || {};
   adminAnalyticsCache = analytics;
   var traffic = analytics.traffic || {};
+  var hourly = traffic.hourly_7d || {};
   var mobile = analytics.mobile_audit || {};
   var users = traffic.top_users || [];
   var targets = mobile.top_targets || [];
@@ -1371,6 +1501,16 @@ function renderAnalytics(analytics) {
       '<div class="speed-cell"><div class="speed-cell-lbl">Upload</div><div class="speed-cell-val" style="color:var(--accent)">' + fmtBytes(traffic.total_up || 0) + '</div></div>' +
     '</div>' +
     '<div style="height:14px"></div>' +
+    '<div class="card-label">Hourly Traffic - Last 7 Days</div>' +
+    '<div class="speed-grid">' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">Hourly Total</div><div class="speed-cell-val">' + fmtBytes(hourly.total || 0) + '</div></div>' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">Peak Hour</div><div class="speed-cell-val" style="color:var(--teal)">' + fmtBytes((hourly.peak || {}).total || 0) + '</div></div>' +
+      '<div class="speed-cell"><div class="speed-cell-lbl">Peak Time</div><div class="speed-cell-val" style="font-size:13px">' + fmtDate((hourly.peak || {}).hour) + '</div></div>' +
+    '</div>' +
+    '<div style="height:10px"></div>' +
+    '<canvas id="admin-hourly-chart" style="width:100%;height:220px;display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px"></canvas>' +
+    '<div style="font-size:11px;color:var(--muted);margin-top:7px">Total traffic is shown in teal; upload is shown as a thin purple line. Data is stored hourly in traffic.sqlite3 for future analysis.</div>' +
+    '<div style="height:14px"></div>' +
     '<div class="info-box">Clash-based iPhone/Android/mac/windows traffic goes through the Network container, so destination hints come from mobile proxy logs. SSH runner fallback traffic remains destination-blind.</div>' +
     '<div style="height:14px"></div>' +
     '<div class="card-label">Mobile Proxy Destinations</div>' +
@@ -1387,6 +1527,9 @@ function renderAnalytics(analytics) {
     (events.length
       ? '<div class="term"><div class="term-body">' + events.slice(0, 20).map(eventLine).join('') + '</div></div>'
       : '<div class="key-empty">No recent mobile proxy events.</div>');
+  setTimeout(function() {
+    drawAdminHourlyTrafficChart((hourly.hours || []));
+  }, 0);
 }
 
 async function updateRequestDevice(rid, device) {
@@ -1396,7 +1539,7 @@ async function updateRequestDevice(rid, device) {
       headers: {'Content-Type': 'application/json', 'X-Root-Key': rootKey},
       body: JSON.stringify({device: device}),
     }, 8000);
-    loadKeys();
+      loadKeys(true);
   } catch(e) {
     alert('Update failed: ' + e.message);
   }
@@ -1414,7 +1557,7 @@ async function approveRequest(rid, btn) {
     }, 12000);
     var d = await r.json();
     if (!d.ok) alert('Error: ' + (d.error || 'Approve failed'));
-    loadKeys();
+    loadKeys(true);
   } catch(e) {
     alert('Error: ' + e.message);
     btn.disabled = false;
@@ -1426,7 +1569,7 @@ async function rejectRequest(rid, btn) {
     btn.disabled = true;
     fetchT(API + '/api/admin/requests/' + encodeURIComponent(rid), {
       method: 'DELETE', headers: {'X-Root-Key': rootKey},
-    }, 8000).then(loadKeys).catch(function(e) {
+    }, 8000).then(function(){ loadKeys(true); }).catch(function(e) {
       alert('Error: ' + e.message);
       btn.disabled = false;
     });
@@ -1462,7 +1605,7 @@ async function revokeKey(kid) {
     await fetchT(API + '/api/admin/keys/' + encodeURIComponent(kid), {
       method: 'DELETE', headers: {'X-Root-Key': rootKey},
     });
-    loadKeys();
+    loadKeys(true);
   } catch(e) {
     alert('Error: ' + e.message);
   }

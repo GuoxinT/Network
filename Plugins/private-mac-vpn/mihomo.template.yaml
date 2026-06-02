@@ -1,0 +1,45 @@
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+external-controller: 0.0.0.0:9090
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+geodata-mode: false
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+
+proxy-providers:
+  private-subscription:
+    type: http
+    url: "__PRIVATE_PROXY_PROVIDER_URL__"
+    interval: 3600
+    path: ./private-subscription.yaml
+    health-check:
+      enable: true
+      interval: 600
+      url: http://www.gstatic.com/generate_204
+
+proxy-groups:
+  - name: PRIVATE
+    type: select
+    use:
+      - private-subscription
+    filter: "美国01-0\\.1倍"
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+
+rules:
+  - MATCH,PRIVATE

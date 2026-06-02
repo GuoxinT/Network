@@ -21,7 +21,7 @@ keys.json
   Root key, verify keys, request records, device metadata, IP audit history
 
 traffic.sqlite3
-  Persistent per-key daily traffic totals for the last-7-days charts
+  Persistent per-key daily and hourly traffic totals for charts and analysis
 
 keys/
   Per-user ed25519 SSH keypairs for mac/windows SSH runner mode
@@ -86,10 +86,26 @@ Admin `/api/admin/keys` returns an `analytics` object used by the admin panel:
 - consolidated user management data with status, device, mode, 7-day traffic,
   last active time, IP audit data, and subscription links
 - 7-day total traffic
+- recent 168-hour total traffic series, including peak hour metadata
 - top users by traffic
 - IP audit metadata
 - mobile proxy destination logs parsed from the `Network` container
 - keyword-based flagged destination hints
+
+Traffic accounting:
+
+- Traffic writes are persisted into both `traffic_daily` and `traffic_hourly`.
+  `traffic_hourly` stores per-key hourly totals using UTC hour buckets and is
+  the source for the admin 7-day hourly curve.
+- SSH runner traffic is sampled from established TCP socket byte counters on
+  the SSH port.
+- Clash/Shadowrocket users receive per-user Shadowsocks ports/passwords in the
+  `8400-8599` range. TCP traffic is sampled from established socket byte
+  counters on each user's port and attributed directly to that key.
+- The shared `8388` Shadowsocks port remains for legacy profiles and is
+  attributed by client IP as a fallback.
+- UDP traffic cannot be measured with the same precision through TCP socket
+  counters. Use TCP-heavy test traffic when validating accounting.
 
 Pending requests can be corrected before approval by changing the device in the
 admin table. Revoke is the destructive access-removal action and is confirmed in

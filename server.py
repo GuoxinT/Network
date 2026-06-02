@@ -9,7 +9,7 @@ client), and the dashboard still shows real stats for every user.
 """
 import os, re, json, time, shutil, secrets, threading, subprocess, base64, pwd, sqlite3
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote
 from flask import Flask, request, jsonify, Response, send_file, abort
 from flask_cors import CORS
@@ -37,6 +37,12 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 KEYS_FILE   = os.path.join(BASE_DIR, 'keys.json')
 KEYS_DIR    = os.path.join(BASE_DIR, 'keys')
 SS_CONFIG   = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'config.json')
+SS_USERS    = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'users.json')
+SS_CONFIG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'ssserver.d')
+SS_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'logs')
+PRIVATE_VPN_CONFIG = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'config.json')
+PRIVATE_VPN_USERS = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'users.json')
+PRIVATE_VPN_CONFIG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'ssserver.d')
 TRAFFIC_DB  = os.path.join(BASE_DIR, 'traffic.sqlite3')
 SSH_USER    = os.environ.get('SSH_USER',    'user1')
 SERVER_HOST = os.environ.get('SERVER_HOST', '10.1.4.43')
@@ -47,7 +53,12 @@ LOCK_TO_FIRST_IP = False
 KICK_SSH_ON_REVOKE = False
 COOKIE_NAME = 'labvpn_key'
 MOBILE_PROXY_CONTAINER = 'Network'
+PRIVATE_VPN_PROXY_CONTAINER = 'PrivateVPNProxy'
 VALID_DEVICES = ('iphone', 'android', 'mac', 'windows')
+SS_USER_PORT_START = 8400
+SS_USER_PORT_END = 8599
+PRIVATE_VPN_PORT_START = 8600
+PRIVATE_VPN_PORT_END = 8699
 _IOS_NET = {
     'rx': None, 'tx': None, 't': None,
     'base_rx': None, 'base_tx': None,
@@ -118,6 +129,9 @@ def _request_host(default=SERVER_HOST):
         return default
     return host
 
+def _is_loopback_ip(ip):
+    return ip in ('127.0.0.1', '::1', 'localhost')
+
 def _norm_device(device):
     d = (device or '').strip().lower()
     aliases = {
@@ -157,33 +171,43 @@ def _init_traffic_db():
                 PRIMARY KEY (key_id, day)
             )
         ''')
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS traffic_hourly (
+                key_id TEXT NOT NULL,
+                hour TEXT NOT NULL,
+                down_bytes INTEGER NOT NULL DEFAULT 0,
+                up_bytes INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (key_id, hour)
+            )
+        ''')
+        db.execute('CREATE INDEX IF NOT EXISTS idx_traffic_hourly_hour ON traffic_hourly(hour)')
     try:
         os.chmod(TRAFFIC_DB, 0o600)
     except OSError:
         pass
+
+def _utc_hour(dt=None):
+    dt = dt or datetime.utcnow()
+    return dt.replace(minute=0, second=0, microsecond=0).isoformat()
 
 def _add_traffic(kid, down_bytes, up_bytes):
     down_bytes = int(max(0, down_bytes or 0))
     up_bytes = int(max(0, up_bytes or 0))
     if not kid or (down_bytes == 0 and up_bytes == 0):
         return
-    day = datetime.utcnow().date().isoformat()
-    try:
-        with sqlite3.connect(TRAFFIC_DB) as db:
-            db.execute('''
-                INSERT INTO traffic_daily(key_id, day, down_bytes, up_bytes)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(key_id, day) DO UPDATE SET
-                    down_bytes = down_bytes + excluded.down_bytes,
-                    up_bytes = up_bytes + excluded.up_bytes
-            ''', (kid, day, down_bytes, up_bytes))
-    except sqlite3.OperationalError:
+    now = datetime.utcnow()
+    day = now.date().isoformat()
+    hour = _utc_hour(now)
+    with sqlite3.connect(TRAFFIC_DB) as db:
         # CentOS 7 may ship an older SQLite without UPSERT support.
-        with sqlite3.connect(TRAFFIC_DB) as db:
-            db.execute('INSERT OR IGNORE INTO traffic_daily(key_id, day, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
-                       (kid, day))
-            db.execute('UPDATE traffic_daily SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND day = ?',
-                       (down_bytes, up_bytes, kid, day))
+        db.execute('INSERT OR IGNORE INTO traffic_daily(key_id, day, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
+                   (kid, day))
+        db.execute('UPDATE traffic_daily SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND day = ?',
+                   (down_bytes, up_bytes, kid, day))
+        db.execute('INSERT OR IGNORE INTO traffic_hourly(key_id, hour, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
+                   (kid, hour))
+        db.execute('UPDATE traffic_hourly SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND hour = ?',
+                   (down_bytes, up_bytes, kid, hour))
 
 def _traffic_7d(kid):
     today = datetime.utcnow().date()
@@ -196,6 +220,31 @@ def _traffic_7d(kid):
             rows[day] = {'down': down, 'up': up}
     return [{'day': day, 'down': rows.get(day, {}).get('down', 0), 'up': rows.get(day, {}).get('up', 0)}
             for day in days]
+
+def _admin_hourly_traffic(hours=168):
+    end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    slots = []
+    for i in range(hours - 1, -1, -1):
+        dt = end - timedelta(hours=i)
+        slots.append(dt.isoformat())
+    rows = {hour: {'hour': hour, 'down': 0, 'up': 0, 'total': 0} for hour in slots}
+    with sqlite3.connect(TRAFFIC_DB) as db:
+        for hour, down, up in db.execute(
+                'SELECT hour, SUM(down_bytes), SUM(up_bytes) FROM traffic_hourly WHERE hour >= ? GROUP BY hour',
+                (slots[0],)):
+            if hour in rows:
+                down = int(down or 0)
+                up = int(up or 0)
+                rows[hour] = {'hour': hour, 'down': down, 'up': up, 'total': down + up}
+    series = [rows[hour] for hour in slots]
+    peak = max(series, key=lambda r: r['total']) if series else {'hour': '', 'down': 0, 'up': 0, 'total': 0}
+    return {
+        'hours': series,
+        'peak': peak,
+        'total_down': sum(r['down'] for r in series),
+        'total_up': sum(r['up'] for r in series),
+        'total': sum(r['total'] for r in series),
+    }
 
 _init_traffic_db()
 
@@ -228,6 +277,12 @@ def _record_key_ip(entry, client_ip, activate=False):
         entry['activated'] = True
         entry['activated_at'] = datetime.utcnow().isoformat()
         changed = True
+    if _is_loopback_ip(client_ip):
+        age = _iso_age_seconds(entry.get('last_seen_at'))
+        if age is None or age > 60:
+            entry['last_seen_at'] = _now_iso()
+            changed = True
+        return changed
     if not entry.get('activated_ip'):
         entry['activated_ip'] = client_ip
         changed = True
@@ -306,6 +361,268 @@ def _shadowsocks_service_up():
     except Exception:
         return False
 
+def _shadowsocks_port():
+    try:
+        with open(SS_CONFIG) as f:
+            return str(int(json.load(f).get('server_port', 8388)))
+    except Exception:
+        return '8388'
+
+def _ss_password():
+    # Shadowsocks 2022 ciphers require a base64 key of the right length.
+    return base64.b64encode(os.urandom(16)).decode()
+
+def _used_ss_ports():
+    ports = set()
+    try:
+        ports.add(int(_shadowsocks_port()))
+    except Exception:
+        ports.add(8388)
+    for entry in DATA.get('verify_keys', {}).values():
+        if entry.get('ss_port'):
+            ports.add(int(entry['ss_port']))
+    return ports
+
+def _allocate_ss_port():
+    used = _used_ss_ports()
+    for port in range(SS_USER_PORT_START, SS_USER_PORT_END + 1):
+        if port not in used:
+            return port
+    raise RuntimeError('No free Shadowsocks per-user ports available')
+
+def _ss_config_name(kid, port):
+    safe_key = ''.join(c if c.isalnum() else '-' for c in kid)
+    return ('user-%s-%s.json' % (int(port), safe_key))[:90]
+
+def _ss_log_name(kid, port):
+    return _ss_config_name(kid, port).rsplit('.', 1)[0] + '.log'
+
+def _write_ssserver_config(path, port, password, method, cfg_path=SS_CONFIG):
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    out = {
+        'server': '0.0.0.0',
+        'server_port': int(port),
+        'password': password,
+        'method': method,
+        'timeout': int(cfg.get('timeout', 300)),
+        'mode': cfg.get('mode', 'tcp_and_udp'),
+    }
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(out, f, indent=2)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+def _ensure_ss_process(kid, entry):
+    if not _shadowsocks_service_up():
+        return False
+    port = entry.get('ss_port')
+    if not port:
+        return False
+    name = _ss_config_name(kid, port)
+    host_path = os.path.join(SS_CONFIG_DIR, name)
+    container_path = '/app/state/ssserver.d/' + name
+    container_log = '/app/state/logs/' + _ss_log_name(kid, port)
+    _write_ssserver_config(host_path, port, entry.get('ss_password'), entry.get('ss_method') or _ss_method())
+    try:
+        check = subprocess.run(
+            ['docker', 'exec', MOBILE_PROXY_CONTAINER, 'sh', '-lc',
+             "ps -ef | grep -F 'ssserver' | grep -F %s | grep -v grep" % sh_quote(container_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            universal_newlines=True, timeout=4,
+        )
+        if check.returncode == 0:
+            return True
+        subprocess.run(
+            ['docker', 'exec', '-d', MOBILE_PROXY_CONTAINER, 'sh', '-lc',
+             "while true; do ssserver -vv -c %s 2>&1 | awk '/tcp tunnel .* closed|udp relay .* with [0-9]+ bytes/ { print; fflush(); }' >> %s; echo \"$(date -u +%%FT%%TZ) ssserver exited for %s; restarting in 1s\" >> %s; sleep 1; done"
+             % (sh_quote(container_path), sh_quote(container_log), sh_quote(container_path), sh_quote(container_log))],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=6,
+        )
+        return True
+    except Exception:
+        return False
+
+def sh_quote(s):
+    return "'" + str(s).replace("'", "'\"'\"'") + "'"
+
+def _monitored_ports():
+    ports = {str(SSH_PORT), str(_shadowsocks_port())}
+    for entry in DATA.get('verify_keys', {}).values():
+        if entry.get('ss_port'):
+            ports.add(str(entry['ss_port']))
+    return tuple(sorted(ports))
+
+def _sync_ss_users(restart=False):
+    users = []
+    for kid, entry in DATA.get('verify_keys', {}).items():
+        if entry.get('mode') not in ('ios_shadowrocket', 'android_clash', 'desktop_clash'):
+            continue
+        if not entry.get('ss_port') or not entry.get('ss_password'):
+            continue
+        users.append({
+            'key': kid,
+            'label': entry.get('label', ''),
+            'port': int(entry['ss_port']),
+            'password': entry['ss_password'],
+            'method': entry.get('ss_method') or _ss_method(),
+            'enabled': True,
+        })
+    os.makedirs(os.path.dirname(SS_USERS), mode=0o700, exist_ok=True)
+    with open(SS_USERS, 'w') as f:
+        json.dump({'users': users, 'updated_at': _now_iso()}, f, indent=2)
+    try:
+        os.chmod(SS_USERS, 0o600)
+    except OSError:
+        pass
+    for item in users:
+        _write_ssserver_config(
+            os.path.join(SS_CONFIG_DIR, _ss_config_name(item['key'], item['port'])),
+            item['port'], item['password'], item['method'])
+    if restart:
+        try:
+            subprocess.run(['docker', 'restart', MOBILE_PROXY_CONTAINER],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True, timeout=15)
+        except Exception:
+            pass
+
+def _ss_method():
+    try:
+        with open(SS_CONFIG) as f:
+            return json.load(f).get('method', '2022-blake3-aes-128-gcm')
+    except Exception:
+        return '2022-blake3-aes-128-gcm'
+
+def _preferred_ss_method(entry):
+    if (entry or {}).get('mode') == 'ios_shadowrocket':
+        return 'chacha20-ietf-poly1305'
+    return _ss_method()
+
+def _private_vpn_cfg():
+    cfg = {
+        'enabled': False,
+        'server_host': SERVER_HOST,
+        'server_port': PRIVATE_VPN_PORT_START,
+        'method': 'chacha20-ietf-poly1305',
+        'timeout': 300,
+        'mode': 'tcp_and_udp',
+        'keys': [],
+    }
+    try:
+        with open(PRIVATE_VPN_CONFIG) as f:
+            raw = json.load(f)
+        cfg.update(raw or {})
+    except Exception:
+        pass
+    return cfg
+
+def _private_vpn_enabled_for(kid, entry):
+    cfg = _private_vpn_cfg()
+    keys = set(str(k).strip() for k in (cfg.get('keys') or []) if str(k).strip())
+    return bool(cfg.get('enabled') and (kid in keys or entry.get('private_vpn')))
+
+def _used_private_vpn_ports():
+    ports = set()
+    for entry in DATA.get('verify_keys', {}).values():
+        if entry.get('private_vpn_port'):
+            ports.add(int(entry['private_vpn_port']))
+    return ports
+
+def _allocate_private_vpn_port():
+    used = _used_private_vpn_ports()
+    for port in range(PRIVATE_VPN_PORT_START, PRIVATE_VPN_PORT_END + 1):
+        if port not in used:
+            return port
+    raise RuntimeError('No free private VPN Shadowsocks ports available')
+
+def _sync_private_vpn_users(restart=False):
+    cfg = _private_vpn_cfg()
+    users = []
+    if cfg.get('enabled'):
+        for kid, entry in DATA.get('verify_keys', {}).items():
+            if not _private_vpn_enabled_for(kid, entry):
+                continue
+            if not entry.get('private_vpn_port') or not entry.get('private_vpn_password'):
+                continue
+            users.append({
+                'key': kid,
+                'label': entry.get('label', ''),
+                'port': int(entry['private_vpn_port']),
+                'password': entry['private_vpn_password'],
+                'method': entry.get('private_vpn_method') or cfg.get('method') or 'chacha20-ietf-poly1305',
+                'enabled': True,
+            })
+    os.makedirs(os.path.dirname(PRIVATE_VPN_USERS), mode=0o700, exist_ok=True)
+    os.makedirs(PRIVATE_VPN_CONFIG_DIR, mode=0o700, exist_ok=True)
+    with open(PRIVATE_VPN_USERS, 'w') as f:
+        json.dump({'users': users, 'updated_at': _now_iso()}, f, indent=2)
+    try:
+        os.chmod(PRIVATE_VPN_USERS, 0o600)
+    except OSError:
+        pass
+    for item in users:
+        _write_ssserver_config(
+            os.path.join(PRIVATE_VPN_CONFIG_DIR, _ss_config_name(item['key'], item['port'])),
+            item['port'], item['password'], item['method'], cfg_path=PRIVATE_VPN_CONFIG)
+    if restart:
+        try:
+            subprocess.run(['docker', 'restart', PRIVATE_VPN_PROXY_CONTAINER],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True, timeout=15)
+        except Exception:
+            pass
+
+def _ensure_private_vpn_user(kid, entry, restart=False):
+    if not _private_vpn_enabled_for(kid, entry):
+        return False
+    cfg = _private_vpn_cfg()
+    changed = False
+    if not entry.get('private_vpn_port'):
+        entry['private_vpn_port'] = _allocate_private_vpn_port()
+        changed = True
+    if not entry.get('private_vpn_password'):
+        entry['private_vpn_password'] = _ss_password()
+        changed = True
+    method = cfg.get('method') or 'chacha20-ietf-poly1305'
+    if entry.get('private_vpn_method') != method:
+        entry['private_vpn_method'] = method
+        changed = True
+    if changed:
+        _save(DATA)
+    _sync_private_vpn_users(restart=bool(restart and changed))
+    return changed
+
+def _ensure_ss_user(kid, entry, restart=False):
+    if entry.get('mode') not in ('ios_shadowrocket', 'android_clash', 'desktop_clash'):
+        return False
+    changed = False
+    if not entry.get('ss_port'):
+        entry['ss_port'] = _allocate_ss_port()
+        changed = True
+    if not entry.get('ss_password'):
+        entry['ss_password'] = _ss_password()
+        changed = True
+    preferred_method = _preferred_ss_method(entry)
+    if entry.get('ss_method') != preferred_method:
+        entry['ss_method'] = preferred_method
+        changed = True
+    if changed:
+        _save(DATA)
+    _sync_ss_users(restart=bool(changed and restart))
+    if changed:
+        _ensure_ss_process(kid, entry)
+    elif restart:
+        _ensure_ss_process(kid, entry)
+    return changed
+
 def _shadowsocks_net_stats():
     """Return approximate container network stats for iOS Shadowsocks mode."""
     now = time.time()
@@ -357,16 +674,21 @@ def _shadowsocks_net_stats():
         'delta_tx': delta_tx,
     }
 
-def _shadowrocket_url(host=None):
+def _shadowrocket_url(host=None, kid=None):
     if not os.path.exists(SS_CONFIG):
         raise RuntimeError('Shadowsocks iOS plugin is not configured')
     with open(SS_CONFIG) as f:
         cfg = json.load(f)
+    entry = DATA.get('verify_keys', {}).get(kid) if kid else None
+    if entry:
+        _ensure_ss_user(kid, entry, restart=True)
     server_host = host or cfg.get('server_host') or SERVER_HOST
-    userinfo = f"{cfg['method']}:{cfg['password']}@{server_host}:{int(cfg['server_port'])}"
-    encoded = base64.urlsafe_b64encode(userinfo.encode()).decode().rstrip('=')
-    name = cfg.get('profile_name', 'SchoolVPN-iOS')
-    return f"ss://{encoded}#{name}"
+    method = (entry or {}).get('ss_method') or cfg['method']
+    password = (entry or {}).get('ss_password') or cfg['password']
+    port = int((entry or {}).get('ss_port') or cfg['server_port'])
+    userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip('=')
+    name = quote((entry or {}).get('label') or cfg.get('profile_name', 'SchoolVPN-iOS'), safe='')
+    return f"ss://{userinfo}@{server_host}:{port}#{name}"
 
 def _clash_profile_urls(kid):
     entry = DATA.get('verify_keys', {}).get(kid) or {}
@@ -387,9 +709,55 @@ def _clash_yaml(kid, host=None):
         cfg = json.load(f)
     entry = DATA.get('verify_keys', {}).get(kid) or {}
     device = _norm_device(entry.get('device'))
-    name = 'SchoolVPN-Android' if device == 'android' else 'SchoolVPN-ClashVerge'
+    private_vpn = _private_vpn_enabled_for(kid, entry)
+    if private_vpn:
+        private_cfg = _private_vpn_cfg()
+        _ensure_private_vpn_user(kid, entry, restart=True)
+        _ensure_ss_user(kid, entry, restart=True)
+        name = 'SchoolVPN-PrivateVPN'
+        proxy_host = host or private_cfg.get('server_host') or SERVER_HOST
+        proxy_port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
+        proxy_password = entry.get('private_vpn_password') or private_cfg.get('password') or cfg['password']
+        direct_name = 'SchoolVPN-Direct'
+        direct_host = host or cfg.get('server_host') or SERVER_HOST
+        direct_port = int(entry.get('ss_port') or cfg['server_port'])
+        direct_method = entry.get('ss_method') or cfg['method']
+        direct_password = entry.get('ss_password') or cfg['password']
+        proxy_block = f'''  - name: {name}
+    type: socks5
+    server: {proxy_host}
+    port: {proxy_port}
+    username: "{kid}"
+    password: "{proxy_password}"
+    udp: false
+  - name: {direct_name}
+    type: ss
+    server: {direct_host}
+    port: {direct_port}
+    cipher: {direct_method}
+    password: "{direct_password}"
+    udp: true'''
+        group_proxy_names = f'''      - {name}
+      - {direct_name}'''
+    else:
+        _ensure_ss_user(kid, entry, restart=True)
+        name = 'SchoolVPN-Android' if device == 'android' else 'SchoolVPN-ClashVerge'
+        proxy_host = host or cfg.get('server_host') or SERVER_HOST
+        proxy_port = int(entry.get('ss_port') or cfg['server_port'])
+        proxy_method = entry.get('ss_method') or cfg['method']
+        proxy_password = entry.get('ss_password') or cfg['password']
+        proxy_block = f'''  - name: {name}
+    type: ss
+    server: {proxy_host}
+    port: {proxy_port}
+    cipher: {proxy_method}
+    password: "{proxy_password}"
+    udp: true'''
+        group_proxy_names = f'''      - {name}'''
+    comment = 'Private VPN outlet for this key only.' if private_vpn else 'Standard School VPN outlet.'
     return f'''# School VPN - Clash Meta / Mihomo
 # Generated by School VPN. Revoking the user's key invalidates this subscription.
+# {comment}
 
 mixed-port: 7890
 allow-lan: false
@@ -406,19 +774,13 @@ dns:
     - 119.29.29.29
 
 proxies:
-  - name: {name}
-    type: ss
-    server: {host or cfg.get('server_host') or SERVER_HOST}
-    port: {int(cfg['server_port'])}
-    cipher: {cfg['method']}
-    password: "{cfg['password']}"
-    udp: true
+{proxy_block}
 
 proxy-groups:
   - name: PROXY
     type: select
     proxies:
-      - {name}
+{group_proxy_names}
 
 rules:
   - MATCH,PROXY
@@ -577,7 +939,10 @@ def _kick_ssh_sessions():
 _mon_lock  = threading.Lock()
 _ip_stats  = {}   # ip -> live stats dict
 _ip_logs   = {}   # ip -> deque[{t, event}]
+_key_stats = {}   # key id -> live proxy stats dict
 _sock_prev = {}   # socket key -> (sent, recv) from the previous sample
+_ss_log_offsets = {}
+_proxy_rate_prev = {}
 
 _RE_SENT  = re.compile(r'bytes_sent:(\d+)')
 _RE_ACKED = re.compile(r'bytes_acked:(\d+)')
@@ -586,6 +951,12 @@ _RE_MOBILE_TARGET = re.compile(
     r'(?P<t>\d{4}-\d\d-\d\dT[^\s]+Z).*?\btunnel\s+'
     r'(?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+->\s+'
     r'(?P<target>\[[^\]]+\]|[^:\s]+):(?P<port>\d+)\s*(?P<msg>.*)$'
+)
+_RE_SS_TCP_CLOSED = re.compile(
+    r'tcp tunnel (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+<->\s+.+?\s+closed,\s+L2R\s+(?P<up>\d+)\s+bytes,\s+R2L\s+(?P<down>\d+)\s+bytes'
+)
+_RE_SS_UDP = re.compile(
+    r'udp relay (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+(?P<dir>->|<-)\s+.+?\s+with\s+(?P<bytes>\d+)\s+bytes'
 )
 _SUSPICIOUS_HINTS = (
     'porn', 'adult', 'casino', 'gamble', 'bet365', 'torrent', 'tracker',
@@ -621,6 +992,37 @@ def _key_for_client_ip(ip):
         return None, None
     kid = matches[0]
     return kid, DATA.get('verify_keys', {}).get(kid, {})
+
+def _best_key_for_ip(ip, modes):
+    candidates = []
+    for kid, entry in DATA.get('verify_keys', {}).items():
+        if entry.get('mode', 'ssh_runner') not in modes:
+            continue
+        known_ips = set(entry.get('ip_history') or [])
+        if entry.get('activated_ip'):
+            known_ips.add(entry.get('activated_ip'))
+        if entry.get('last_ip'):
+            known_ips.add(entry.get('last_ip'))
+        if ip not in known_ips:
+            continue
+        recency = (entry.get('last_seen_at') or entry.get('last_profile_at')
+                   or entry.get('last_download') or entry.get('activated_at')
+                   or entry.get('created_at') or '')
+        candidates.append((recency, kid, entry))
+    if not candidates:
+        return None, None
+    candidates.sort(reverse=True)
+    return candidates[0][1], candidates[0][2]
+
+def _key_for_ss_port(port):
+    try:
+        port = int(port)
+    except Exception:
+        return None, None
+    for kid, entry in DATA.get('verify_keys', {}).items():
+        if int(entry.get('ss_port') or -1) == port:
+            return kid, entry
+    return None, None
 
 def _traffic_admin_summary():
     today = datetime.utcnow().date()
@@ -661,6 +1063,7 @@ def _traffic_admin_summary():
     return {
         'days': [per_day[day] for day in days],
         'top_users': users,
+        'hourly_7d': _admin_hourly_traffic(168),
         'total_down': total_down,
         'total_up': total_up,
         'total': total_down + total_up,
@@ -678,7 +1081,7 @@ def _admin_profile_links(kid, entry):
         if mode in ('android_clash', 'desktop_clash') or (mode == 'ssh_runner' and device in ('mac', 'windows')):
             out['config_url'], out['import_url'] = _clash_profile_urls(kid)
         elif mode == 'ios_shadowrocket':
-            out['shadowrocket_url'] = _shadowrocket_url(_request_host())
+            out['shadowrocket_url'] = _shadowrocket_url(_request_host(), kid)
     except Exception as e:
         out['error'] = str(e)
     return out
@@ -694,6 +1097,10 @@ def _admin_users():
             entry['mode'] = 'desktop_clash'
             mode = 'desktop_clash'
             changed = True
+        if mode in ('ios_shadowrocket', 'android_clash', 'desktop_clash'):
+            _ensure_ss_user(kid, entry)
+        if _private_vpn_enabled_for(kid, entry):
+            _ensure_private_vpn_user(kid, entry)
         had_profile_token = bool(entry.get('profile_token'))
         links = _admin_profile_links(kid, entry)
         if links.get('config_url') and not had_profile_token:
@@ -720,6 +1127,9 @@ def _admin_users():
             'import_url': links.get('import_url', ''),
             'shadowrocket_url': links.get('shadowrocket_url', ''),
             'profile_error': links.get('error', ''),
+            'ss_port': entry.get('ss_port'),
+            'private_vpn': bool(_private_vpn_enabled_for(kid, entry)),
+            'private_vpn_port': entry.get('private_vpn_port'),
         })
     if changed:
         _save(DATA)
@@ -817,6 +1227,8 @@ def _admin_diagnostics():
         'container_status': docker_line,
         'ss_config_exists': os.path.exists(SS_CONFIG),
         'tcp_udp_8388_exposed': '8388/tcp' in docker_line and '8388/udp' in docker_line,
+        'traffic_accounting': 'tcp_socket_bytes_by_user_port',
+        'per_user_ss_ports': len([e for e in DATA.get('verify_keys', {}).values() if e.get('ss_port')]),
         'profile_last_request_at': recent_profile,
         'pending_requests': len(pending),
         'key_count': len(DATA.get('verify_keys', {})),
@@ -839,8 +1251,80 @@ def _log_event(ip, event):
     _ip_logs.setdefault(ip, deque(maxlen=50)).appendleft(
         {'t': datetime.utcnow().isoformat(), 'event': event})
 
-def _ss_sockets():
-    """Established SSH sockets terminating on our port: (key, peer_ip, sent, recv).
+def _key_from_ss_log_path(path):
+    base = os.path.basename(path)
+    m = re.match(r'user-(\d+)-(.+)\.log$', base)
+    if not m:
+        return None, None
+    return _key_for_ss_port(m.group(1))
+
+def _record_proxy_delta(kid, client_ip, down, up):
+    if not kid or (down <= 0 and up <= 0):
+        return
+    _add_traffic(kid, down, up)
+    now = time.time()
+    now_iso = datetime.utcnow().isoformat()
+    with _mon_lock:
+        prev = _proxy_rate_prev.get(kid)
+        dt = max(now - prev, SAMPLE_SEC) if prev else SAMPLE_SEC
+        _proxy_rate_prev[kid] = now
+        st = _ip_stats.setdefault(client_ip, _new_stat())
+        if not st.get('connected'):
+            st['connected'] = True
+            st['since'] = now_iso
+        st['sess_down'] += down
+        st['sess_up'] += up
+        st['down_bps'] = down / dt
+        st['up_bps'] = up / dt
+        ks = _key_stats.setdefault(kid, _new_stat())
+        if not ks.get('connected'):
+            ks['connected'] = True
+            ks['since'] = now_iso
+        ks['sess_down'] += down
+        ks['sess_up'] += up
+        ks['down_bps'] = down / dt
+        ks['up_bps'] = up / dt
+        ks['last_at'] = now_iso
+        ks['rate_at'] = now_iso
+        ks['last_ip'] = client_ip
+
+def _process_ss_logs():
+    if not os.path.isdir(SS_LOG_DIR):
+        return
+    for name in os.listdir(SS_LOG_DIR):
+        if not name.endswith('.log'):
+            continue
+        path = os.path.join(SS_LOG_DIR, name)
+        kid, _entry = _key_from_ss_log_path(path)
+        if not kid:
+            continue
+        try:
+            size = os.path.getsize(path)
+            pos = _ss_log_offsets.get(path, 0)
+            if pos > size:
+                pos = 0
+            with open(path, 'r', errors='ignore') as f:
+                f.seek(pos)
+                for ln in f:
+                    m = _RE_SS_TCP_CLOSED.search(ln)
+                    if m:
+                        client = m.group('client').strip('[]')
+                        _record_proxy_delta(kid, client, int(m.group('down')), int(m.group('up')))
+                        continue
+                    m = _RE_SS_UDP.search(ln)
+                    if m:
+                        client = m.group('client').strip('[]')
+                        n = int(m.group('bytes'))
+                        if m.group('dir') == '->':
+                            _record_proxy_delta(kid, client, 0, n)
+                        else:
+                            _record_proxy_delta(kid, client, n, 0)
+                _ss_log_offsets[path] = f.tell()
+        except Exception:
+            continue
+
+def _ss_sockets_for_ports(ports):
+    """Established TCP sockets terminating on monitored ports.
 
     `ss -i` prints each socket as a header line (state / local / peer) followed
     by an indented info line carrying the byte counters. Older iproute2 has no
@@ -848,6 +1332,7 @@ def _ss_sockets():
     the two lines manually and fall back to bytes_acked for "sent"."""
     if not _SS:
         return None
+    ports = set(str(p) for p in ports if p)
     try:
         r = subprocess.run([_SS, '-tinH', 'state', 'established'],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -862,7 +1347,7 @@ def _ss_sockets():
             if cur:
                 ms = _RE_SENT.search(ln) or _RE_ACKED.search(ln)
                 mr = _RE_RECV.search(ln)
-                out.append((cur[0], cur[1],
+                out.append((cur[0], cur[1], cur[2],
                             int(ms.group(1)) if ms else 0,
                             int(mr.group(1)) if mr else 0))
                 cur = None
@@ -873,8 +1358,11 @@ def _ss_sockets():
             cur = None
             if len(parts) >= 4:
                 local, peer = parts[-2], parts[-1]
-                if ':' in local and ':' in peer and local.rsplit(':', 1)[-1] == SSH_PORT:
-                    cur = (local + '|' + peer, peer.rsplit(':', 1)[0].strip('[]'))
+                if ':' in local and ':' in peer:
+                    port = local.rsplit(':', 1)[-1]
+                    if port in ports:
+                        cur = (port + '|' + local + '|' + peer, port,
+                               peer.rsplit(':', 1)[0].strip('[]'))
     return out
 
 SAMPLE_SEC = 0.5   # how often we read socket counters (finer = snappier graph)
@@ -884,7 +1372,9 @@ def _monitor_loop():
     prev_t = time.time()
     while True:
         time.sleep(SAMPLE_SEC)
-        socks = _ss_sockets()
+        _process_ss_logs()
+        shared_ss_port = _shadowsocks_port()
+        socks = _ss_sockets_for_ports(_monitored_ports())
         if socks is None:
             continue
         now = time.time()
@@ -893,21 +1383,45 @@ def _monitor_loop():
         if dt <= 0:
             dt = SAMPLE_SEC
         cur, delta, present = {}, {}, set()
-        for key, ip, sent, recv in socks:
+        for key, port, ip, sent, recv in socks:
             cur[key] = (sent, recv)
-            present.add(ip)
+            present.add((port, ip))
             prev = _sock_prev.get(key)
             ds = max(0, sent - prev[0]) if prev else 0
             dr = max(0, recv - prev[1]) if prev else 0
-            d = delta.setdefault(ip, [0, 0])
+            d = delta.setdefault((port, ip), [0, 0])
             d[0] += ds; d[1] += dr
         _sock_prev = cur
 
         with _mon_lock:
-            for ip in set(_ip_stats) | present:
+            for (port, peer_ip), vals in delta.items():
+                if str(port) in (str(SSH_PORT), str(shared_ss_port)):
+                    continue
+                key_id, _entry = _key_for_ss_port(port)
+                if not key_id:
+                    continue
+                ks = _key_stats.setdefault(key_id, _new_stat())
+                if not ks.get('connected'):
+                    ks['connected'] = True
+                    ks['since'] = datetime.utcnow().isoformat()
+                ks['down_bps'] = vals[0] / dt
+                ks['up_bps'] = vals[1] / dt
+                ks['sess_down'] += vals[0]
+                ks['sess_up'] += vals[1]
+                ks['last_at'] = datetime.utcnow().isoformat()
+                if vals[0] > 0 or vals[1] > 0:
+                    ks['rate_at'] = ks['last_at']
+                ks['last_ip'] = peer_ip
+
+            present_ips = set(ip for _port, ip in present)
+            for ip in set(_ip_stats) | present_ips:
                 st = _ip_stats.setdefault(ip, _new_stat())
-                was, now_c = st['connected'], ip in present
-                d = delta.get(ip, [0, 0])
+                was, now_c = st['connected'], ip in present_ips
+                d = [0, 0]
+                for (_port, peer_ip), vals in delta.items():
+                    if peer_ip == ip:
+                        d[0] += vals[0]
+                        d[1] += vals[1]
                 if now_c:
                     if not was:                       # new session
                         st['sess_down'] = st['sess_up'] = 0
@@ -918,8 +1432,10 @@ def _monitor_loop():
                     st['up_bps']   = d[1] / dt
                     st['sess_down'] += d[0]
                     st['sess_up']   += d[1]
-                    for kid in _keys_for_ip(ip, 'ssh_runner'):
-                        _add_traffic(kid, d[0], d[1])
+                    if delta.get((SSH_PORT, ip)):
+                        kid, _entry = _best_key_for_ip(ip, ('ssh_runner',))
+                        if kid:
+                            _add_traffic(kid, delta[(SSH_PORT, ip)][0], delta[(SSH_PORT, ip)][1])
                 else:
                     if was:
                         _log_event(ip, 'down')
@@ -992,8 +1508,9 @@ def admin_approve_request(rid):
                 kid = req.get('key') or _create_verify_key(label + ' iOS', device='iphone', mode='ios_shadowrocket')
             req['status'] = 'approved'
             req['key'] = kid
+            _ensure_ss_user(kid, DATA['verify_keys'][kid], restart=True)
             if mode == 'ios_shadowrocket':
-                req['link'] = req.get('link') or _shadowrocket_url(_request_host())
+                req['link'] = req.get('link') or _shadowrocket_url(_request_host(), kid)
             else:
                 req['config_url'], req['link'] = _clash_profile_urls(kid)
             req['approved_at'] = datetime.utcnow().isoformat()
@@ -1054,6 +1571,7 @@ def admin_revoke(kid):
             p = os.path.join(KEYS_DIR, kid + ext)
             if os.path.exists(p):
                 os.remove(p)
+        _sync_ss_users(restart=True)
         kicked = _kick_ssh_sessions()
     return jsonify({'ok': True, 'kicked_sessions': kicked})
 
@@ -1115,7 +1633,8 @@ def request_key_status(rid):
                 req['config_url'], req['link'] = _clash_profile_urls(req['key'])
             else:
                 req['key'] = _create_verify_key(label + ' iOS', device='iphone', mode='ios_shadowrocket')
-                req['link'] = req.get('link') or _shadowrocket_url(_request_host())
+                req['link'] = req.get('link') or _shadowrocket_url(_request_host(), req['key'])
+            _ensure_ss_user(req['key'], DATA['verify_keys'][req['key']], restart=True)
             _mark_ios_key_active(req['key'], req)
             _save(DATA)
         except Exception as e:
@@ -1128,7 +1647,7 @@ def request_key_status(rid):
             req['config_url'], req['link'] = _clash_profile_urls(req['key'])
             changed = True
         elif req.get('kind') == 'ios_shadowrocket':
-            req['link'] = _shadowrocket_url(_request_host())
+            req['link'] = _shadowrocket_url(_request_host(), req['key'])
         if _mark_ios_key_active(req['key'], req):
             changed = True
         if changed:
@@ -1144,7 +1663,7 @@ def request_key_status(rid):
         if req.get('kind') in ('android_clash', 'desktop_clash'):
             req['config_url'], req['link'] = _clash_profile_urls(req['key'])
         elif req.get('kind') == 'ios_shadowrocket':
-            req['link'] = _shadowrocket_url(_request_host())
+            req['link'] = _shadowrocket_url(_request_host(), req['key'])
     if req.get('status') == 'approved' and req.get('link'):
         out['link'] = req['link']
     if req.get('status') == 'approved' and req.get('config_url'):
@@ -1196,32 +1715,39 @@ def user_status():
         _save(DATA)
     if mode in ('ios_shadowrocket', 'android_clash', 'desktop_clash'):
         service_up = _shadowsocks_service_up()
-        net = _shadowsocks_net_stats() if service_up else {
-            'rx_bps': 0, 'tx_bps': 0, 'sess_rx': 0, 'sess_tx': 0, 'delta_rx': 0, 'delta_tx': 0,
-        }
-        _add_traffic(kid, net['delta_tx'], net['delta_rx'])
-        st.update({
-            'connected': service_up,
-            'since': entry.get('activated_at') if service_up else None,
-            'down_bps': net['tx_bps'],
-            'up_bps': net['rx_bps'],
-            'sess_down': net['sess_tx'],
-            'sess_up': net['sess_rx'],
-        })
+        with _mon_lock:
+            key_st = dict(_key_stats.get(kid) or {})
+        recent_proxy = (_iso_age_seconds(key_st.get('last_at')) or 10 ** 9) < 90
+        recent_rate = (_iso_age_seconds(key_st.get('rate_at')) or 10 ** 9) < 7
+        if key_st:
+            st.update(key_st)
+            st['connected'] = bool(service_up and recent_proxy)
+            if not recent_rate:
+                st['down_bps'] = 0
+                st['up_bps'] = 0
+        if not service_up:
+            st.update({'connected': False, 'down_bps': 0, 'up_bps': 0})
         log = []
     clash_config_url = clash_import_url = None
+    shadowrocket_url = None
     if mode in ('android_clash', 'desktop_clash') or (mode == 'ssh_runner' and device in ('mac', 'windows')):
         had_profile_token = bool(entry.get('profile_token'))
         clash_config_url, clash_import_url = _clash_profile_urls(kid)
         if (not had_profile_token) or _record_key_ip(entry, request.remote_addr, activate=True):
             _save(DATA)
+    elif mode == 'ios_shadowrocket':
+        try:
+            shadowrocket_url = _shadowrocket_url(_request_host(), kid)
+        except Exception:
+            shadowrocket_url = None
     return jsonify({
         'ok':             True,
         'label':          entry.get('label', ''),
         'mode':           mode,
         'device':         device,
         'config_url':     clash_config_url,
-        'link':           clash_import_url,
+        'link':           shadowrocket_url or clash_import_url,
+        'shadowrocket_url': shadowrocket_url,
         'activated':      entry['activated'],
         'activated_at':   entry.get('activated_at'),
         'activated_ip':   entry.get('activated_ip'),

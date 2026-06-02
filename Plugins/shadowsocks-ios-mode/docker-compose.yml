@@ -3,10 +3,13 @@ services:
     build: .
     image: schoolvpn-network:local
     container_name: Network
+    user: "${PUID:-1002}:${PGID:-1002}"
     restart: unless-stopped
     ports:
       - "8388:8388/tcp"
       - "8388:8388/udp"
+      - "8400-8599:8400-8599/tcp"
+      - "8400-8599:8400-8599/udp"
     volumes:
       - ./config.json:/app/config.json:ro
       - ./state:/app/state

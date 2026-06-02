@@ -5,6 +5,8 @@ keys.json
 keys/
 # Live Shadowsocks credentials (commit config.example.json instead)
 Plugins/shadowsocks-ios-mode/config.json
+Plugins/private-mac-vpn/.env
+Plugins/private-mac-vpn/config.json
 gateway/config.json
 
 # ── Runtime / generated data ─────────────────────────────────────────────
@@ -13,6 +15,7 @@ gateway/config.json
 server.log
 # Container runtime state (generated ssserver.json, etc.)
 Plugins/shadowsocks-ios-mode/state/
+Plugins/private-mac-vpn/state/
 gateway/state/
 
 # ── Local editor / Claude config ─────────────────────────────────────────
