@@ -1330,16 +1330,23 @@ function showIosLinkNotice(link) {
   if (!pendingIosLink) return;
   var msg = document.getElementById('dash-dl-msg');
   if (!msg) return;
-  var isPrivate = /\/api\/profile\/shadowrocket\//i.test(pendingIosLink) || /^socks5:\/\//i.test(pendingIosLink);
+  var subUrl = '';
+  try {
+    if (/^shadowrocket:\/\/add\/sub/i.test(pendingIosLink)) {
+      subUrl = new URL(pendingIosLink).searchParams.get('url') || '';
+    }
+  } catch(e) {}
+  var isPrivate = /^shadowrocket:\/\/add\/sub/i.test(pendingIosLink) || /\/api\/profile\/shadowrocket\//i.test(pendingIosLink) || /^socks5:\/\//i.test(pendingIosLink);
   var title = isPrivate ? 'iOS Shadowrocket Private VPN link is ready.' : 'iOS Shadowrocket link is ready.';
   var routeText = isPrivate
-    ? 'Open this in Shadowrocket and select <strong>SchoolVPN-PrivateVPN</strong>. If iOS opens a browser instead, copy the link and import it in Shadowrocket from URL / Subscribe.'
+    ? 'Open this in Shadowrocket and select <strong>SchoolVPN-PrivateVPN</strong>. If iOS opens a browser instead, copy the subscription URL and import it in Shadowrocket from URL / Subscribe.'
     : 'After importing, select the <strong>SchoolVPN-iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.';
   var openButton = '<a class="btn btn-accent btn-sm" href="' + esc(pendingIosLink) + '">Open in Shadowrocket</a>';
+  var subButton = subUrl ? ' <button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(subUrl) + '&quot;,this)">Copy subscription URL</button>' : '';
   msg.innerHTML =
     '<div class="info-box ok">' + title + ' ' +
     '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(pendingIosLink) + '&quot;,this)">Copy link</button> ' +
-    openButton +
+    openButton + subButton +
     '<div style="margin-top:8px;color:var(--muted);line-height:1.55">' + routeText + '</div></div>';
 }
 

@@ -59,6 +59,13 @@ SS_USER_PORT_START = 8400
 SS_USER_PORT_END = 8599
 PRIVATE_VPN_PORT_START = 8600
 PRIVATE_VPN_PORT_END = 8699
+# Local timezone offset (hours) used only for bucketing traffic into days/hours
+# so the dashboard's "today" matches the operator's wall clock. Default +8
+# (China). Stored timestamps elsewhere stay UTC; only bucket labels shift.
+TRAFFIC_TZ_OFFSET_HOURS = int(os.environ.get('TRAFFIC_TZ_OFFSET_HOURS', '8'))
+# Key id used to bucket traffic on the shared Shadowsocks port, which cannot be
+# attributed to a single user (one port, one shared password).
+SHARED_TRAFFIC_KEY = '__shared__'
 _IOS_NET = {
     'rx': None, 'tx': None, 't': None,
     'base_rx': None, 'base_tx': None,
@@ -160,8 +167,22 @@ def _device_kind(device):
         return 'desktop_clash'
     return 'verify_key'
 
+_traffic_write_lock = threading.Lock()
+
+def _traffic_db():
+    """Open the traffic DB with a generous busy timeout. WAL mode (set once at
+    init) lets the 0.5 s sampler write while admin/user reads run concurrently
+    without hitting 'database is locked'."""
+    db = sqlite3.connect(TRAFFIC_DB, timeout=30)
+    db.execute('PRAGMA busy_timeout=30000')
+    return db
+
 def _init_traffic_db():
-    with sqlite3.connect(TRAFFIC_DB) as db:
+    with _traffic_db() as db:
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.DatabaseError:
+            pass
         db.execute('''
             CREATE TABLE IF NOT EXISTS traffic_daily (
                 key_id TEXT NOT NULL,
@@ -186,34 +207,57 @@ def _init_traffic_db():
     except OSError:
         pass
 
-def _utc_hour(dt=None):
-    dt = dt or datetime.utcnow()
+def _traffic_now():
+    """Wall-clock time in the operator's timezone, used for day/hour bucketing."""
+    return datetime.utcnow() + timedelta(hours=TRAFFIC_TZ_OFFSET_HOURS)
+
+def _local_hour(dt=None):
+    dt = dt or _traffic_now()
     return dt.replace(minute=0, second=0, microsecond=0).isoformat()
 
-def _add_traffic(kid, down_bytes, up_bytes):
-    down_bytes = int(max(0, down_bytes or 0))
-    up_bytes = int(max(0, up_bytes or 0))
-    if not kid or (down_bytes == 0 and up_bytes == 0):
+# In-memory accrual of byte deltas keyed by key id. The sampler adds to this
+# every 0.5 s; a flusher writes it to SQLite in one transaction every few
+# seconds. This is the single source of truth for billing — it is fed only by
+# socket byte counters (see _monitor_loop), never by parsing connection logs.
+_pending_traffic = {}
+
+def _accrue_traffic(kid, down_bytes, up_bytes):
+    down_bytes = int(down_bytes or 0)
+    up_bytes = int(up_bytes or 0)
+    if not kid or (down_bytes <= 0 and up_bytes <= 0):
         return
-    now = datetime.utcnow()
+    # Caller already holds _mon_lock.
+    slot = _pending_traffic.setdefault(kid, [0, 0])
+    slot[0] += max(0, down_bytes)
+    slot[1] += max(0, up_bytes)
+
+def _flush_pending_traffic():
+    global _pending_traffic
+    with _mon_lock:
+        pending, _pending_traffic = _pending_traffic, {}
+    pending = {k: v for k, v in pending.items() if v[0] > 0 or v[1] > 0}
+    if not pending:
+        return
+    now = _traffic_now()
     day = now.date().isoformat()
-    hour = _utc_hour(now)
-    with sqlite3.connect(TRAFFIC_DB) as db:
-        # CentOS 7 may ship an older SQLite without UPSERT support.
-        db.execute('INSERT OR IGNORE INTO traffic_daily(key_id, day, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
-                   (kid, day))
-        db.execute('UPDATE traffic_daily SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND day = ?',
-                   (down_bytes, up_bytes, kid, day))
-        db.execute('INSERT OR IGNORE INTO traffic_hourly(key_id, hour, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
-                   (kid, hour))
-        db.execute('UPDATE traffic_hourly SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND hour = ?',
-                   (down_bytes, up_bytes, kid, hour))
+    hour = _local_hour(now)
+    with _traffic_write_lock, _traffic_db() as db:
+        for kid, (down, up) in pending.items():
+            # CentOS 7 may ship an older SQLite without UPSERT support.
+            db.execute('INSERT OR IGNORE INTO traffic_daily(key_id, day, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
+                       (kid, day))
+            db.execute('UPDATE traffic_daily SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND day = ?',
+                       (down, up, kid, day))
+            db.execute('INSERT OR IGNORE INTO traffic_hourly(key_id, hour, down_bytes, up_bytes) VALUES (?, ?, 0, 0)',
+                       (kid, hour))
+            db.execute('UPDATE traffic_hourly SET down_bytes = down_bytes + ?, up_bytes = up_bytes + ? WHERE key_id = ? AND hour = ?',
+                       (down, up, kid, hour))
 
 def _traffic_7d(kid):
-    today = datetime.utcnow().date()
+    today = _traffic_now().date()
     days = [(today.fromordinal(today.toordinal() - i)).isoformat() for i in range(6, -1, -1)]
     rows = {}
-    with sqlite3.connect(TRAFFIC_DB) as db:
+    with _traffic_db() as db:
         for day, down, up in db.execute(
                 'SELECT day, down_bytes, up_bytes FROM traffic_daily WHERE key_id = ? AND day >= ?',
                 (kid, days[0])):
@@ -222,13 +266,13 @@ def _traffic_7d(kid):
             for day in days]
 
 def _admin_hourly_traffic(hours=168):
-    end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    end = _traffic_now().replace(minute=0, second=0, microsecond=0)
     slots = []
     for i in range(hours - 1, -1, -1):
         dt = end - timedelta(hours=i)
         slots.append(dt.isoformat())
     rows = {hour: {'hour': hour, 'down': 0, 'up': 0, 'total': 0} for hour in slots}
-    with sqlite3.connect(TRAFFIC_DB) as db:
+    with _traffic_db() as db:
         for hour, down, up in db.execute(
                 'SELECT hour, SUM(down_bytes), SUM(up_bytes) FROM traffic_hourly WHERE hour >= ? GROUP BY hour',
                 (slots[0],)):
@@ -698,9 +742,23 @@ def _shadowrocket_profile_url(kid):
     if not token:
         token = secrets.token_urlsafe(24)
         entry['profile_token'] = token
-    config_url = request.url_root.rstrip('/') + '/api/profile/shadowrocket/' + quote(token)
-    return ('shadowrocket://add/sub?url=' + quote(config_url, safe='')
+    sub_url = request.url_root.rstrip('/') + '/api/profile/shadowrocket/' + quote(token)
+    return ('shadowrocket://add/sub?url=' + quote(sub_url, safe='')
             + '&remark=' + quote('SchoolVPN-PrivateVPN', safe=''))
+
+def _shadowrocket_subscription(kid, host=None):
+    entry = DATA.get('verify_keys', {}).get(kid) or {}
+    if not _private_vpn_enabled_for(kid, entry):
+        return _shadowrocket_url(host, kid) + '\n'
+    private_cfg = _private_vpn_cfg()
+    _ensure_private_vpn_user(kid, entry, restart=True)
+    server_host = host or private_cfg.get('server_host') or SERVER_HOST
+    port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
+    password = entry.get('private_vpn_password') or private_cfg.get('password') or ''
+    user = quote(kid, safe='')
+    pwd_q = quote(password, safe='')
+    name = quote((entry.get('label') or 'SchoolVPN-PrivateVPN'), safe='')
+    return f"socks5://{user}:{pwd_q}@{server_host}:{port}#{name}\n"
 
 def _shadowrocket_conf(kid, host=None):
     entry = DATA.get('verify_keys', {}).get(kid) or {}
@@ -1063,21 +1121,24 @@ def _best_key_for_ip(ip, modes):
     return candidates[0][1], candidates[0][2]
 
 def _key_for_ss_port(port):
+    """Map a monitored listening port back to the key that owns it. Each key has
+    a dedicated Shadowsocks port and (optionally) a dedicated private-VPN port;
+    both belong to the same user, so traffic on either counts to that key."""
     try:
         port = int(port)
     except Exception:
         return None, None
     for kid, entry in DATA.get('verify_keys', {}).items():
-        if int(entry.get('ss_port') or -1) == port:
+        if int(entry.get('ss_port') or -1) == port or int(entry.get('private_vpn_port') or -1) == port:
             return kid, entry
     return None, None
 
 def _traffic_admin_summary():
-    today = datetime.utcnow().date()
+    today = _traffic_now().date()
     days = [(today.fromordinal(today.toordinal() - i)).isoformat() for i in range(6, -1, -1)]
     per_key = {}
     per_day = {day: {'day': day, 'down': 0, 'up': 0} for day in days}
-    with sqlite3.connect(TRAFFIC_DB) as db:
+    with _traffic_db() as db:
         for kid, day, down, up in db.execute(
                 'SELECT key_id, day, down_bytes, up_bytes FROM traffic_daily WHERE day >= ?',
                 (days[0],)):
@@ -1093,12 +1154,13 @@ def _traffic_admin_summary():
     users = []
     for kid, totals in per_key.items():
         entry = DATA.get('verify_keys', {}).get(kid, {})
+        is_shared = kid == SHARED_TRAFFIC_KEY
         total = totals['down'] + totals['up']
         users.append({
             'key': kid,
-            'label': entry.get('label', ''),
+            'label': entry.get('label', '') or ('共享端口（未归属）' if is_shared else ''),
             'device': entry.get('device', ''),
-            'mode': entry.get('mode', ''),
+            'mode': entry.get('mode', '') or ('shared' if is_shared else ''),
             'down': totals['down'],
             'up': totals['up'],
             'total': total,
@@ -1887,15 +1949,24 @@ def clash_profile(token):
 
 @app.route('/api/profile/shadowrocket/<token>')
 def shadowrocket_profile(token):
-    token = (token or '').strip()
-    kid = None
-    profile_entry = None
-    for key_id, entry in DATA.get('verify_keys', {}).items():
-        if (entry.get('mode') == 'ios_shadowrocket'
-                and secrets.compare_digest(entry.get('profile_token') or '', token)):
-            kid = key_id
-            profile_entry = entry
-            break
+    kid, profile_entry = _shadowrocket_profile_entry(token)
+    if not kid:
+        abort(404)
+    if profile_entry is not None:
+        profile_entry['last_profile_at'] = _now_iso()
+        _mark_key_seen(profile_entry, request.remote_addr)
+        _save(DATA)
+    try:
+        sub = _shadowrocket_subscription(kid, _request_host())
+    except Exception as e:
+        return str(e), 500
+    return Response(sub, mimetype='text/plain',
+                    headers={'Cache-Control': 'no-store',
+                             'Content-Disposition': 'inline; filename="schoolvpn-shadowrocket.txt"'})
+
+@app.route('/api/profile/shadowrocket-conf/<token>')
+def shadowrocket_conf_profile(token):
+    kid, profile_entry = _shadowrocket_profile_entry(token)
     if not kid:
         abort(404)
     if profile_entry is not None:
@@ -1909,6 +1980,18 @@ def shadowrocket_profile(token):
     return Response(conf, mimetype='text/plain',
                     headers={'Cache-Control': 'no-store',
                              'Content-Disposition': 'inline; filename="schoolvpn-shadowrocket.conf"'})
+
+def _shadowrocket_profile_entry(token):
+    token = (token or '').strip()
+    kid = None
+    profile_entry = None
+    for key_id, entry in DATA.get('verify_keys', {}).items():
+        if (entry.get('mode') == 'ios_shadowrocket'
+                and secrets.compare_digest(entry.get('profile_token') or '', token)):
+            kid = key_id
+            profile_entry = entry
+            break
+    return kid, profile_entry
 
 # ── Runner download (activates the key on first download) ─────────────────────
 
