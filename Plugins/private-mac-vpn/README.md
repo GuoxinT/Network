@@ -8,12 +8,17 @@ user continues to use the normal `Network` container.
 ## Design
 
 - `PrivateVPN` runs Mihomo and loads the private subscription provider.
-- `PrivateVPNProxy` exposes authenticated SOCKS5 ports and chains outbound
-  traffic through `PrivateVPN` on the Docker network.
+- `PrivateVPNProxy` exposes authenticated SOCKS5 TCP and UDP Associate ports
+  and chains outbound traffic through `PrivateVPN` on the Docker network.
 - Only ports `8600-8699` are exposed for this private outlet.
 - `server.py` switches a Clash profile to this outlet only when
-  `config.json.enabled` is true and the user's verify key is listed in
-  `config.json.keys`.
+  `config.json.enabled` is true and either the user's verify key is listed in
+  `config.json.keys` or admin enables the user's Private VPN toggle.
+- Admin can manually turn Private VPN on or off per Clash/Mihomo user from the
+  user management table. Turning it off overrides the legacy `config.json.keys`
+  allowlist for that key. Clash Verge users receive a `SchoolVPN-PrivateVPN`
+  node with UDP enabled, so TUN mode and UDP-heavy apps can use the private
+  outlet.
 - Allowlisted Clash profiles also include `SchoolVPN-Direct`, which uses the
   normal per-user School-VPN Shadowsocks port and does not chain through the
   private subscription.

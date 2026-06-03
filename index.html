@@ -137,6 +137,8 @@ select {
 .keys-table td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .keys-table tr:last-child td { border-bottom: none; }
 .keys-table tr:hover td { background: rgba(255,255,255,.015); }
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.table-scroll .keys-table { min-width: 980px; }
 .sort-btn {
   appearance: none; background: transparent; border: 0; color: inherit;
   cursor: pointer; font: inherit; letter-spacing: inherit; padding: 0;
@@ -151,6 +153,43 @@ select {
   padding: 7px 10px;
 }
 .filter-btn.active { border-color: var(--accent); color: var(--text); background: rgba(108,99,255,.12); }
+.admin-nav {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 14px;
+  position: sticky; top: 0; z-index: 4; background: rgba(13,15,24,.92);
+  padding: 8px 0; backdrop-filter: blur(8px);
+}
+.admin-nav-btn {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 800;
+  padding: 9px 12px;
+}
+.admin-nav-btn.active { color: var(--text); border-color: var(--accent); background: rgba(108,99,255,.15); }
+.toggle-btn {
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg);
+  color: var(--muted); cursor: pointer; display: inline-flex; align-items: center;
+  gap: 7px; font-size: 11px; font-weight: 800; padding: 5px 9px;
+}
+.toggle-btn::before {
+  content: ''; width: 18px; height: 10px; border-radius: 999px;
+  background: rgba(136,146,164,.35); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.toggle-btn.on { color: var(--teal); border-color: rgba(0,212,170,.35); background: rgba(0,212,170,.08); }
+.toggle-btn.on::before { background: var(--teal); }
+.toggle-btn:disabled { opacity: .45; cursor: wait; }
+.private-panel {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; display: grid; gap: 8px;
+}
+.private-panel-row {
+  display: grid; grid-template-columns: minmax(160px, 1fr) 110px 150px auto;
+  gap: 10px; align-items: center; font-size: 12px;
+}
+.private-panel-user { min-width: 0; }
+.private-panel-user strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.private-panel-user span { color: var(--muted); font-size: 11px; }
+@media (max-width: 760px) {
+  .private-panel-row { grid-template-columns: 1fr; }
+}
 .inline-select {
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); font-size: 12px; padding: 6px 8px; width: auto;
@@ -220,6 +259,39 @@ select {
   text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px;
 }
 .speed-cell-val { font-size: 16px; font-weight: 700; }
+.chart-frame {
+  position: relative; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px; min-height: 0;
+}
+.chart-frame canvas { width: 100%; display: block; }
+.chart-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.seg-control { display: inline-flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.seg-btn {
+  background: transparent; border: 0; border-radius: 6px; color: var(--muted);
+  cursor: pointer; font-size: 12px; font-weight: 700; padding: 6px 9px;
+}
+.seg-btn.active { background: rgba(108,99,255,.18); color: var(--text); }
+.chart-readout {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  color: var(--muted); font-size: 12px; margin-top: 8px;
+}
+.chart-readout div {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; min-width: 0;
+}
+.chart-readout strong { display: block; color: var(--text); font-size: 13px; margin-top: 3px; }
+.mini-bars { display: grid; gap: 7px; margin-top: 10px; }
+.mini-bar-row { display: grid; grid-template-columns: 72px 1fr 80px; gap: 8px; align-items: center; font-size: 12px; }
+.mini-bar-label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-bar-track { height: 8px; background: rgba(255,255,255,.06); border-radius: 999px; overflow: hidden; }
+.mini-bar-fill { height: 100%; background: linear-gradient(90deg, var(--teal), var(--accent)); border-radius: inherit; }
+.mini-bar-value { text-align: right; font-weight: 700; }
+.table-tools { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.table-tools input { max-width: 260px; padding: 8px 10px; font-size: 12px; }
+@media (max-width: 680px) {
+  .chart-readout { grid-template-columns: 1fr; }
+  .mini-bar-row { grid-template-columns: 58px 1fr 70px; }
+}
 
 .dl-card {
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
@@ -339,6 +411,15 @@ select {
           <div class="speed-cell-val" id="spd-dur">—</div>
         </div>
       </div>
+      <div style="height:10px"></div>
+      <div class="chart-frame">
+        <canvas id="speed-chart" style="height:96px"></canvas>
+      </div>
+      <div class="chart-readout" id="speed-readout">
+        <div>Now<strong>—</strong></div>
+        <div>Peak<strong>—</strong></div>
+        <div>Samples<strong>0</strong></div>
+      </div>
     </div>
 
     <!-- seven-day usage -->
@@ -351,7 +432,15 @@ select {
           <span id="usage-total" style="color:var(--muted)"></span>
         </span>
       </div>
-      <canvas id="usage-chart" style="width:100%;height:150px;display:block"></canvas>
+      <div class="chart-frame">
+        <canvas id="usage-chart" style="height:170px"></canvas>
+      </div>
+      <div class="chart-readout" id="usage-readout">
+        <div>Selected<strong>Move over a day</strong></div>
+        <div>Download<strong>—</strong></div>
+        <div>Upload<strong>—</strong></div>
+      </div>
+      <div class="mini-bars" id="usage-day-bars"></div>
     </div>
 
     <!-- data flow + session -->
@@ -429,51 +518,63 @@ select {
 
   <div id="admin-dash" class="hidden fade-in">
     <div class="content-wrap">
-      <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-          <span>Health</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
-        </div>
-        <div style="height:14px"></div>
-        <div id="diagnostics-wrap"><div class="key-empty">Loading…</div></div>
+      <div class="admin-nav">
+        <button class="admin-nav-btn active" id="admin-nav-overview" onclick="setAdminSection('overview')">Overview</button>
+        <button class="admin-nav-btn" id="admin-nav-access" onclick="setAdminSection('access')">Access</button>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadKeys(true)">&#8635; Refresh</button>
       </div>
 
-      <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-          <span>Pending Requests</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+      <div id="admin-section-overview">
+        <div class="card">
+          <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+            <span>Health</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+          </div>
+          <div style="height:14px"></div>
+          <div id="diagnostics-wrap"><div class="key-empty">Loading…</div></div>
         </div>
-        <div style="height:14px"></div>
-        <div id="requests-wrap"><div class="key-empty">Loading…</div></div>
+
+        <div class="card">
+          <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+            <span>Destination Audit</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+          </div>
+          <div style="height:14px"></div>
+          <div id="analytics-wrap"><div class="key-empty">Loading…</div></div>
+        </div>
       </div>
 
-      <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-          <span>User Management</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+      <div id="admin-section-access" class="hidden">
+        <div class="card">
+          <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+            <span>Pending Requests</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+          </div>
+          <div style="height:14px"></div>
+          <div id="requests-wrap"><div class="key-empty">Loading…</div></div>
         </div>
-        <div style="height:14px"></div>
-        <div id="user-filters" class="filter-row"></div>
-        <div style="height:10px"></div>
-        <div id="keys-wrap"><div class="key-empty">Loading…</div></div>
-      </div>
 
-      <div class="card">
-        <div class="card-label">Generate Verify Key</div>
-        <div class="gen-row">
-          <input id="gen-label" type="text" placeholder="Label — who is this for? (e.g. Alice's laptop)">
-          <button class="btn btn-accent" onclick="genKey()">+ Create</button>
+        <div class="card">
+          <div class="card-label">Generate Verify Key</div>
+          <div class="gen-row">
+            <input id="gen-label" type="text" placeholder="Label — who is this for? (e.g. Alice's laptop)">
+            <button class="btn btn-accent" onclick="genKey()">+ Create</button>
+          </div>
+          <div id="gen-result"></div>
         </div>
-        <div id="gen-result"></div>
-      </div>
 
-      <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-          <span>Destination Audit</span>
-          <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+        <div class="card">
+          <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
+            <span>User Management</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
+          </div>
+          <div style="height:14px"></div>
+          <div id="user-filters" class="filter-row"></div>
+          <div style="height:10px"></div>
+          <div id="private-vpn-panel"></div>
+          <div style="height:10px"></div>
+          <div id="keys-wrap"><div class="key-empty">Loading…</div></div>
         </div>
-        <div style="height:14px"></div>
-        <div id="analytics-wrap"><div class="key-empty">Loading…</div></div>
       </div>
     </div>
   </div>
@@ -505,6 +606,7 @@ let currentMode = '';
 let adminUserCache = [];
 let adminFilter = 'all';
 let adminUserSort = {key: 'last_seen_at', dir: 'desc'};
+let adminSection = 'overview';
 
 // ── util ──────────────────────────────────────────────
 function esc(s) {
@@ -639,6 +741,10 @@ function goUserFromDash() {
 //  DASHBOARD — polls the server for live stats
 // ══════════════════════════════════════════
 var _statusTimer = null;
+var speedSamples = [];
+var usageChartState = {rows: [], hover: -1, selected: -1};
+var adminChartState = {range: 168, metric: 'total', hover: -1};
+var adminTargetSearch = '';
 
 function startStatusPoll() {
   if (_statusTimer) return;
@@ -649,23 +755,73 @@ function stopStatusPoll() {
   if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
 }
 
+function chartValue(row, metric) {
+  if (!row) return 0;
+  if (metric === 'down') return row.down || 0;
+  if (metric === 'up') return row.up || 0;
+  return row.total || ((row.down || 0) + (row.up || 0));
+}
+function shortDayLabel(day) {
+  if (!day) return '—';
+  var d = new Date(day + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return day.slice(5);
+  return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+}
+function shortHourLabel(hour) {
+  if (!hour) return '—';
+  var d = new Date(hour + 'Z');
+  if (isNaN(d.getTime())) return hour.slice(5, 13);
+  return d.toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit'});
+}
+function updateUsageReadout(row) {
+  var ro = document.getElementById('usage-readout');
+  if (!ro) return;
+  if (!row) {
+    ro.innerHTML = '<div>Selected<strong>Move over a day</strong></div><div>Download<strong>—</strong></div><div>Upload<strong>—</strong></div>';
+    return;
+  }
+  ro.innerHTML =
+    '<div>Selected<strong>' + shortDayLabel(row.day) + ' · ' + fmtBytes((row.down || 0) + (row.up || 0)) + '</strong></div>' +
+    '<div>Download<strong style="color:var(--teal)">' + fmtBytes(row.down || 0) + '</strong></div>' +
+    '<div>Upload<strong style="color:var(--accent)">' + fmtBytes(row.up || 0) + '</strong></div>';
+}
+function renderUsageDayBars(rows) {
+  var el = document.getElementById('usage-day-bars');
+  if (!el) return;
+  rows = rows || [];
+  var maxVal = Math.max(1, ...rows.map(function(r){ return (r.down || 0) + (r.up || 0); }));
+  el.innerHTML = rows.map(function(row, i) {
+    var total = (row.down || 0) + (row.up || 0);
+    var pct = Math.max(2, Math.round(total / maxVal * 100));
+    return '<div class="mini-bar-row" onclick="selectUsageDay(' + i + ')">' +
+      '<div class="mini-bar-label">' + shortDayLabel(row.day) + '</div>' +
+      '<div class="mini-bar-track"><div class="mini-bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="mini-bar-value">' + fmtBytes(total) + '</div>' +
+    '</div>';
+  }).join('');
+}
+function selectUsageDay(i) {
+  usageChartState.selected = i;
+  drawUsageChart(usageChartState.rows);
+}
+
 // ── seven-day usage bars (plain canvas, server-persisted data) ──
 function drawUsageChart(rows) {
   var c = document.getElementById('usage-chart');
   if (!c || !c.clientWidth) return;
   rows = rows || [];
+  usageChartState.rows = rows;
   var dpr = window.devicePixelRatio || 1;
-  var w = c.clientWidth, h = c.clientHeight || 150;
+  var w = c.clientWidth, h = c.clientHeight || 170;
   c.width = w * dpr; c.height = h * dpr;
   var ctx = c.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
+  var padL = 42, padR = 10, padT = 12, padB = 28;
+  var chartW = Math.max(1, w - padL - padR);
+  var chartH = Math.max(1, h - padT - padB);
   ctx.strokeStyle = 'rgba(255,255,255,.05)'; ctx.lineWidth = 1;
-  for (var g = 1; g < 4; g++) {
-    var gy = 12 + (h - 34) * g / 4;
-    ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(w, gy + 0.5); ctx.stroke();
-  }
 
   var maxVal = 1, total = 0, i;
   for (i = 0; i < rows.length; i++) {
@@ -676,24 +832,115 @@ function drawUsageChart(rows) {
   var totalEl = document.getElementById('usage-total');
   if (totalEl) totalEl.textContent = 'total ' + fmtBytes(total);
 
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,.48)';
+  for (var g = 0; g <= 3; g++) {
+    var gy = padT + chartH * g / 3;
+    ctx.beginPath(); ctx.moveTo(padL, gy + 0.5); ctx.lineTo(w - padR, gy + 0.5); ctx.stroke();
+    ctx.fillText(fmtBytes(maxVal * (1 - g / 3)), padL - 8, gy + 4);
+  }
   if (!rows.length) return;
-  var chartTop = 12, chartBottom = h - 24;
-  var chartH = chartBottom - chartTop;
-  var groupW = w / rows.length;
-  var barW = Math.min(22, Math.max(10, groupW * 0.28));
+  var groupW = chartW / rows.length;
+  var barW = Math.min(24, Math.max(8, groupW * 0.34));
   ctx.font = '11px Inter, system-ui, sans-serif';
   ctx.textAlign = 'center';
   for (i = 0; i < rows.length; i++) {
     var row = rows[i];
-    var x = groupW * i + groupW / 2;
+    var x = padL + groupW * i + groupW / 2;
+    var selected = i === usageChartState.hover || i === usageChartState.selected;
+    if (selected) {
+      ctx.fillStyle = 'rgba(255,255,255,.05)';
+      ctx.fillRect(x - groupW / 2 + 2, padT, groupW - 4, chartH);
+    }
     var downH = chartH * ((row.down || 0) / maxVal);
     var upH = chartH * ((row.up || 0) / maxVal);
     ctx.fillStyle = '#00d4aa';
-    ctx.fillRect(x - barW - 2, chartBottom - downH, barW, downH);
+    ctx.fillRect(x - barW - 2, padT + chartH - downH, barW, downH);
     ctx.fillStyle = '#6c63ff';
-    ctx.fillRect(x + 2, chartBottom - upH, barW, upH);
+    ctx.fillRect(x + 2, padT + chartH - upH, barW, upH);
     ctx.fillStyle = 'rgba(255,255,255,.54)';
-    ctx.fillText((row.day || '').slice(5), x, h - 6);
+    ctx.fillText((row.day || '').slice(5), x, h - 8);
+  }
+  var active = rows[usageChartState.hover] || rows[usageChartState.selected] || rows[rows.length - 1];
+  updateUsageReadout(active);
+  renderUsageDayBars(rows);
+}
+
+function attachUsageChartEvents() {
+  var c = document.getElementById('usage-chart');
+  if (!c || c._boundUsage) return;
+  c._boundUsage = true;
+  function indexFromEvent(ev) {
+    var rows = usageChartState.rows || [];
+    if (!rows.length) return -1;
+    var rect = c.getBoundingClientRect();
+    var x = ev.clientX - rect.left;
+    var padL = 42, padR = 10;
+    if (x < padL || x > rect.width - padR) return -1;
+    return Math.max(0, Math.min(rows.length - 1, Math.floor((x - padL) / ((rect.width - padL - padR) / rows.length))));
+  }
+  c.addEventListener('mousemove', function(ev) {
+    usageChartState.hover = indexFromEvent(ev);
+    drawUsageChart(usageChartState.rows);
+  });
+  c.addEventListener('mouseleave', function() {
+    usageChartState.hover = -1;
+    drawUsageChart(usageChartState.rows);
+  });
+  c.addEventListener('click', function(ev) {
+    usageChartState.selected = indexFromEvent(ev);
+    drawUsageChart(usageChartState.rows);
+  });
+}
+
+function drawSpeedChart() {
+  var c = document.getElementById('speed-chart');
+  if (!c || !c.clientWidth) return;
+  var rows = speedSamples.slice(-90);
+  var dpr = window.devicePixelRatio || 1;
+  var w = c.clientWidth, h = c.clientHeight || 96;
+  c.width = w * dpr; c.height = h * dpr;
+  var ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  var padL = 42, padR = 8, padT = 10, padB = 18;
+  var chartW = Math.max(1, w - padL - padR);
+  var chartH = Math.max(1, h - padT - padB);
+  var maxVal = 1;
+  rows.forEach(function(r){ maxVal = Math.max(maxVal, r.down || 0, r.up || 0); });
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.font = '10px Inter, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,.48)';
+  ctx.textAlign = 'right';
+  for (var g = 0; g <= 2; g++) {
+    var gy = padT + chartH * g / 2;
+    ctx.beginPath(); ctx.moveTo(padL, gy + 0.5); ctx.lineTo(w - padR, gy + 0.5); ctx.stroke();
+    ctx.fillText(fmtSpeed(maxVal * (1 - g / 2)).replace('/s',''), padL - 7, gy + 3);
+  }
+  function line(metric, color) {
+    ctx.beginPath();
+    rows.forEach(function(r, i) {
+      var x = padL + chartW * (rows.length <= 1 ? 1 : i / (rows.length - 1));
+      var y = padT + chartH * (1 - (r[metric] || 0) / maxVal);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  if (rows.length) {
+    line('down', '#00d4aa');
+    line('up', '#6c63ff');
+  }
+  var latest = rows[rows.length - 1] || {down: 0, up: 0};
+  var peak = rows.reduce(function(m, r){ return Math.max(m, r.down || 0, r.up || 0); }, 0);
+  var ro = document.getElementById('speed-readout');
+  if (ro) {
+    ro.innerHTML =
+      '<div>Now<strong><span style="color:var(--teal)">' + fmtSpeed(latest.down || 0) + '</span> / <span style="color:var(--accent)">' + fmtSpeed(latest.up || 0) + '</span></strong></div>' +
+      '<div>Peak<strong>' + fmtSpeed(peak) + '</strong></div>' +
+      '<div>Samples<strong>' + rows.length + ' sec</strong></div>';
   }
 }
 
@@ -701,6 +948,7 @@ function drawAdminHourlyTrafficChart(rows) {
   var c = document.getElementById('admin-hourly-chart');
   if (!c || !c.clientWidth) return;
   rows = rows || [];
+  rows = rows.slice(-adminChartState.range);
   var dpr = window.devicePixelRatio || 1;
   var w = c.clientWidth, h = c.clientHeight || 220;
   c.width = w * dpr; c.height = h * dpr;
@@ -713,7 +961,7 @@ function drawAdminHourlyTrafficChart(rows) {
   var chartH = Math.max(1, h - padT - padB);
   var maxVal = 1;
   for (var i = 0; i < rows.length; i++) {
-    maxVal = Math.max(maxVal, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+    maxVal = Math.max(maxVal, chartValue(rows[i], adminChartState.metric));
   }
 
   ctx.strokeStyle = 'rgba(255,255,255,.06)';
@@ -741,12 +989,12 @@ function drawAdminHourlyTrafficChart(rows) {
 
   ctx.beginPath();
   for (i = 0; i < rows.length; i++) {
-    var p = point(i, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+    var p = point(i, chartValue(rows[i], adminChartState.metric));
     if (i === 0) ctx.moveTo(p[0], p[1]);
     else ctx.lineTo(p[0], p[1]);
   }
-  var last = point(rows.length - 1, rows[rows.length - 1].total || 0);
-  var first = point(0, rows[0].total || 0);
+  var last = point(rows.length - 1, chartValue(rows[rows.length - 1], adminChartState.metric));
+  var first = point(0, chartValue(rows[0], adminChartState.metric));
   ctx.lineTo(last[0], padT + chartH);
   ctx.lineTo(first[0], padT + chartH);
   ctx.closePath();
@@ -755,39 +1003,145 @@ function drawAdminHourlyTrafficChart(rows) {
 
   ctx.beginPath();
   for (i = 0; i < rows.length; i++) {
-    p = point(i, rows[i].total || ((rows[i].down || 0) + (rows[i].up || 0)));
+    p = point(i, chartValue(rows[i], adminChartState.metric));
     if (i === 0) ctx.moveTo(p[0], p[1]);
     else ctx.lineTo(p[0], p[1]);
   }
-  ctx.strokeStyle = '#00d4aa';
+  ctx.strokeStyle = adminChartState.metric === 'up' ? '#6c63ff' : '#00d4aa';
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.strokeStyle = 'rgba(108,99,255,.65)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (i = 0; i < rows.length; i++) {
-    p = point(i, rows[i].up || 0);
-    if (i === 0) ctx.moveTo(p[0], p[1]);
-    else ctx.lineTo(p[0], p[1]);
+  if (adminChartState.metric === 'total') {
+    ctx.strokeStyle = 'rgba(108,99,255,.65)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (i = 0; i < rows.length; i++) {
+      p = point(i, rows[i].up || 0);
+      if (i === 0) ctx.moveTo(p[0], p[1]);
+      else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
 
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,.54)';
-  var tickEvery = 24;
+  var tickEvery = adminChartState.range <= 24 ? 6 : 24;
   for (i = 0; i < rows.length; i += tickEvery) {
     p = point(i, 0);
     var d = new Date((rows[i].hour || '') + 'Z');
     var label = isNaN(d.getTime()) ? (rows[i].hour || '').slice(5, 10) : d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+    if (adminChartState.range <= 24 && !isNaN(d.getTime())) {
+      label = d.toLocaleTimeString('en-US', {hour:'2-digit'});
+    }
     ctx.fillText(label, p[0], h - 9);
+  }
+  var hover = adminChartState.hover;
+  if (hover >= 0 && hover < rows.length) {
+    p = point(hover, chartValue(rows[hover], adminChartState.metric));
+    ctx.strokeStyle = 'rgba(255,255,255,.24)';
+    ctx.beginPath(); ctx.moveTo(p[0], padT); ctx.lineTo(p[0], padT + chartH); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2); ctx.fill();
+    updateAdminHourlyReadout(rows[hover]);
+  } else {
+    updateAdminHourlyReadout(rows[rows.length - 1]);
   }
 }
 
+function updateAdminHourlyReadout(row) {
+  var el = document.getElementById('admin-hourly-readout');
+  if (!el) return;
+  if (!row) {
+    el.innerHTML = '<div>Hour<strong>—</strong></div><div>Download<strong>—</strong></div><div>Upload<strong>—</strong></div>';
+    return;
+  }
+  el.innerHTML =
+    '<div>Hour<strong>' + shortHourLabel(row.hour) + '</strong></div>' +
+    '<div>Download<strong style="color:var(--teal)">' + fmtBytes(row.down || 0) + '</strong></div>' +
+    '<div>Upload<strong style="color:var(--accent)">' + fmtBytes(row.up || 0) + '</strong></div>';
+}
+
+function drawAdminDailyChart(rows) {
+  var c = document.getElementById('admin-daily-chart');
+  if (!c || !c.clientWidth) return;
+  rows = rows || [];
+  var dpr = window.devicePixelRatio || 1;
+  var w = c.clientWidth, h = c.clientHeight || 150;
+  c.width = w * dpr; c.height = h * dpr;
+  var ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  var padL = 42, padR = 10, padT = 12, padB = 26;
+  var chartW = Math.max(1, w - padL - padR);
+  var chartH = Math.max(1, h - padT - padB);
+  var maxVal = Math.max(1, ...rows.map(function(r){ return (r.down || 0) + (r.up || 0); }));
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,.48)';
+  ctx.textAlign = 'right';
+  for (var g = 0; g <= 3; g++) {
+    var gy = padT + chartH * g / 3;
+    ctx.beginPath(); ctx.moveTo(padL, gy + 0.5); ctx.lineTo(w - padR, gy + 0.5); ctx.stroke();
+    ctx.fillText(fmtBytes(maxVal * (1 - g / 3)), padL - 8, gy + 4);
+  }
+  if (!rows.length) return;
+  var groupW = chartW / rows.length;
+  var barW = Math.min(34, Math.max(14, groupW * 0.5));
+  rows.forEach(function(row, i) {
+    var x = padL + groupW * i + groupW / 2 - barW / 2;
+    var downH = chartH * ((row.down || 0) / maxVal);
+    var upH = chartH * ((row.up || 0) / maxVal);
+    ctx.fillStyle = '#00d4aa';
+    ctx.fillRect(x, padT + chartH - downH, barW, downH);
+    ctx.fillStyle = '#6c63ff';
+    ctx.fillRect(x, padT + chartH - downH - upH, barW, upH);
+    ctx.fillStyle = 'rgba(255,255,255,.54)';
+    ctx.textAlign = 'center';
+    ctx.fillText((row.day || '').slice(5), x + barW / 2, h - 8);
+  });
+}
+
+function setAdminChartRange(range) {
+  adminChartState.range = Number(range) || 168;
+  if (adminAnalyticsCache) renderAnalytics(adminAnalyticsCache);
+}
+function setAdminChartMetric(metric) {
+  adminChartState.metric = metric;
+  if (adminAnalyticsCache) renderAnalytics(adminAnalyticsCache);
+}
+function setTargetSearch(value) {
+  adminTargetSearch = value || '';
+  renderTargetResults();
+}
+function attachAdminChartEvents() {
+  var c = document.getElementById('admin-hourly-chart');
+  if (!c || c._boundAdminChart) return;
+  c._boundAdminChart = true;
+  c.addEventListener('mousemove', function(ev) {
+    var hourly = (((adminAnalyticsCache || {}).traffic || {}).hourly_7d || {}).hours || [];
+    var rows = hourly.slice(-adminChartState.range);
+    if (!rows.length) return;
+    var rect = c.getBoundingClientRect();
+    var x = ev.clientX - rect.left;
+    var padL = 46, padR = 12;
+    if (x < padL || x > rect.width - padR) adminChartState.hover = -1;
+    else adminChartState.hover = Math.max(0, Math.min(rows.length - 1, Math.round((x - padL) / (rect.width - padL - padR) * (rows.length - 1))));
+    drawAdminHourlyTrafficChart(hourly);
+  });
+  c.addEventListener('mouseleave', function() {
+    adminChartState.hover = -1;
+    drawAdminHourlyTrafficChart((((adminAnalyticsCache || {}).traffic || {}).hourly_7d || {}).hours || []);
+  });
+}
+
 window.addEventListener('resize', function () {
-  if (!document.getElementById('page-dash').classList.contains('hidden')) pollStatus();
+  if (!document.getElementById('page-dash').classList.contains('hidden')) {
+    pollStatus();
+    drawSpeedChart();
+  }
   if (!document.getElementById('page-admin').classList.contains('hidden') && adminAnalyticsCache) {
     drawAdminHourlyTrafficChart(((adminAnalyticsCache.traffic || {}).hourly_7d || {}).hours || []);
+    drawAdminDailyChart((adminAnalyticsCache.traffic || {}).days || []);
   }
 });
 
@@ -835,12 +1189,16 @@ function renderStatus(d) {
   document.getElementById('spd-tx').textContent = d.connected ? fmtSpeed(d.up_bps)   : '—';
   var dur = (d.connected && d.since) ? Math.floor((Date.now() - new Date(d.since + 'Z')) / 1000) : 0;
   document.getElementById('spd-dur').textContent = d.connected ? fmtDur(dur) : '—';
+  speedSamples.push({t: Date.now(), down: d.connected ? Number(d.down_bps || 0) : 0, up: d.connected ? Number(d.up_bps || 0) : 0});
+  if (speedSamples.length > 90) speedSamples = speedSamples.slice(-90);
+  drawSpeedChart();
 
   // data flow
   document.getElementById('flow-rx').textContent = fmtBytes(d.sess_down);
   document.getElementById('flow-tx').textContent = fmtBytes(d.sess_up);
 
   drawUsageChart(d.traffic_7d || []);
+  attachUsageChartEvents();
 
   // session info
   document.getElementById('info-ip').textContent    = d.current_ip || d.last_ip || d.activated_ip || '—';
@@ -972,11 +1330,17 @@ function showIosLinkNotice(link) {
   if (!pendingIosLink) return;
   var msg = document.getElementById('dash-dl-msg');
   if (!msg) return;
+  var isPrivate = /\/api\/profile\/shadowrocket\//i.test(pendingIosLink) || /^socks5:\/\//i.test(pendingIosLink);
+  var title = isPrivate ? 'iOS Shadowrocket Private VPN link is ready.' : 'iOS Shadowrocket link is ready.';
+  var routeText = isPrivate
+    ? 'Open this in Shadowrocket and select <strong>SchoolVPN-PrivateVPN</strong>. If iOS opens a browser instead, copy the link and import it in Shadowrocket from URL / Subscribe.'
+    : 'After importing, select the <strong>SchoolVPN-iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.';
+  var openButton = '<a class="btn btn-accent btn-sm" href="' + esc(pendingIosLink) + '">Open in Shadowrocket</a>';
   msg.innerHTML =
-    '<div class="info-box ok">iOS Shadowrocket link is ready. ' +
+    '<div class="info-box ok">' + title + ' ' +
     '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(pendingIosLink) + '&quot;,this)">Copy link</button> ' +
-    '<a class="btn btn-accent btn-sm" href="' + esc(pendingIosLink) + '">Open in Shadowrocket</a>' +
-    '<div style="margin-top:8px;color:var(--muted);line-height:1.55">After importing, select the <strong>SchoolVPN-iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.</div></div>';
+    openButton +
+    '<div style="margin-top:8px;color:var(--muted);line-height:1.55">' + routeText + '</div></div>';
 }
 
 function showAndroidLinkNotice(configUrl, importUrl) {
@@ -1160,7 +1524,27 @@ function showAdminDash() {
   document.getElementById('hdr-right').innerHTML =
     '<button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="goUser()">&#8592; Back</button>' +
     '<button class="btn btn-ghost btn-sm" onclick="adminLogout()">Log out</button>';
+  setAdminSection(adminSection || 'overview');
   startAdminPoll();
+}
+
+function setAdminSection(section) {
+  adminSection = section === 'access' ? 'access' : 'overview';
+  var overview = document.getElementById('admin-section-overview');
+  var access = document.getElementById('admin-section-access');
+  var overviewBtn = document.getElementById('admin-nav-overview');
+  var accessBtn = document.getElementById('admin-nav-access');
+  if (overview) overview.classList.toggle('hidden', adminSection !== 'overview');
+  if (access) access.classList.toggle('hidden', adminSection !== 'access');
+  if (overviewBtn) overviewBtn.classList.toggle('active', adminSection === 'overview');
+  if (accessBtn) accessBtn.classList.toggle('active', adminSection === 'access');
+  if (adminSection === 'overview' && adminAnalyticsCache) {
+    setTimeout(function() {
+      drawAdminHourlyTrafficChart(((adminAnalyticsCache.traffic || {}).hourly_7d || {}).hours || []);
+      drawAdminDailyChart((adminAnalyticsCache.traffic || {}).days || []);
+      attachAdminChartEvents();
+    }, 0);
+  }
 }
 
 function adminLogout() {
@@ -1304,6 +1688,7 @@ function filterUsers(users) {
     if (adminFilter === 'active') return !!u.activated;
     if (adminFilter === 'unused') return !u.activated;
     if (adminFilter === 'clash') return u.mode === 'android_clash' || u.mode === 'desktop_clash';
+    if (adminFilter === 'private') return !!u.private_vpn;
     if (adminFilter === 'ssh') return u.mode === 'ssh_runner';
     return u.device === adminFilter;
   });
@@ -1328,13 +1713,51 @@ function sortUsers(users) {
 function subscriptionForUser(u) {
   return u.config_url || u.shadowrocket_url || '';
 }
+function canUsePrivateVpn(u) {
+  return u.mode === 'ios_shadowrocket' || u.mode === 'android_clash' || u.mode === 'desktop_clash' ||
+    ((u.device === 'mac' || u.device === 'windows') && u.mode === 'ssh_runner');
+}
+function renderPrivateVpnPanel() {
+  var panel = document.getElementById('private-vpn-panel');
+  if (!panel) return;
+  var users = (adminUserCache || []).filter(canUsePrivateVpn)
+    .sort(function(a, b) { return String(a.label || '').localeCompare(String(b.label || '')); });
+  if (!users.length) {
+    panel.innerHTML = '';
+    return;
+  }
+  panel.innerHTML =
+    '<div class="private-panel">' +
+      '<div class="chart-toolbar">' +
+        '<div><div class="card-label" style="margin-bottom:3px">Private VPN Access</div>' +
+        '<div style="font-size:12px;color:var(--muted)">Manually choose which Shadowrocket / Clash users can use the private outlet.</div></div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="setAdminFilter(&quot;private&quot;)">Show enabled</button>' +
+      '</div>' +
+      users.map(function(u) {
+        var enabled = !!u.private_vpn;
+        var status = enabled
+          ? '<span class="badge badge-green">&#9679; Enabled</span>'
+          : '<span class="badge badge-muted">&#9675; Off</span>';
+        var port = enabled ? ('port ' + esc(u.private_vpn_port || 'pending')) : (u.private_vpn_locked_off ? 'manually off' : 'not assigned');
+        return '<div class="private-panel-row">' +
+          '<div class="private-panel-user"><strong>' + esc(u.label || u.key || '—') + '</strong>' +
+            '<span>' + esc(deviceLabel(u.device)) + ' · ' + esc(modeLabel(u.mode)) + ' · ' + esc(u.last_ip || 'no IP') + '</span></div>' +
+          '<div>' + status + '</div>' +
+          '<div style="color:' + (enabled ? 'var(--teal)' : 'var(--muted)') + '">' + port + '</div>' +
+          '<button class="btn ' + (enabled ? 'btn-ghost' : 'btn-accent') + ' btn-sm" onclick="togglePrivateVpn(&quot;' + esc(u.key) + '&quot;,' + (!enabled) + ',this)">' +
+            (enabled ? 'Disable Private VPN' : 'Enable Private VPN') + '</button>' +
+        '</div>';
+      }).join('') +
+    '</div>';
+}
 function renderUsers() {
   var wrap = document.getElementById('keys-wrap');
   var filters = document.getElementById('user-filters');
   if (!wrap || !filters) return;
+  renderPrivateVpnPanel();
   var options = [
     ['all', 'All'], ['active', 'Active'], ['unused', 'Unused'],
-    ['clash', 'Clash'], ['ssh', 'SSH'], ['iphone', 'iPhone'],
+    ['clash', 'Clash'], ['private', 'Private VPN'], ['ssh', 'SSH'], ['iphone', 'iPhone'],
     ['android', 'Android'], ['mac', 'mac'], ['windows', 'windows']
   ];
   filters.innerHTML = options.map(function(o) {
@@ -1347,10 +1770,10 @@ function renderUsers() {
     return;
   }
   wrap.innerHTML =
-    '<table class="keys-table"><thead><tr>' +
+    '<div class="table-scroll"><table class="keys-table"><thead><tr>' +
       userHead('label', 'User') + userHead('device', 'Device') + userHead('mode', 'Mode') +
       userHead('total', '7d Traffic') + userHead('last_seen_at', 'Last Active') +
-      '<th>IP Audit</th><th>Subscription</th><th></th>' +
+      '<th>IP Audit</th><th>Private VPN</th><th>Subscription</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map(function(u) {
       var sub = subscriptionForUser(u);
@@ -1363,6 +1786,12 @@ function renderUsers() {
             ? '<br><span style="font-size:11px;color:var(--teal)">private VPN port ' + esc(u.private_vpn_port || '—') + '</span>'
             : (u.ss_port ? '<br><span style="font-size:11px;color:var(--muted)">port ' + esc(u.ss_port) + '</span>' : ''))
         : '<span style="color:var(--muted);font-size:12px">' + esc(u.profile_error || '—') + '</span>';
+      var canPrivateVpn = canUsePrivateVpn(u);
+      var privateCell = canPrivateVpn
+        ? '<button class="toggle-btn ' + (u.private_vpn ? 'on' : '') + '" onclick="togglePrivateVpn(&quot;' + esc(u.key) + '&quot;,' + (!u.private_vpn) + ',this)">' +
+            (u.private_vpn ? 'Enabled' : 'Off') + '</button>' +
+          (u.private_vpn_locked_off ? '<br><span style="font-size:11px;color:var(--yellow)">manually off</span>' : '')
+        : '<span style="font-size:12px;color:var(--muted)">Clash only</span>';
       return '<tr>' +
         '<td><strong>' + esc(u.label || '—') + '</strong><br>' +
           '<span style="font-family:monospace;font-size:11px;color:var(--muted)">' + esc(u.key) + '</span> ' +
@@ -1375,10 +1804,11 @@ function renderUsers() {
         '<td>' + esc(fmtAgo(u.last_seen_at)) + '<br><span style="font-size:11px;color:var(--muted)">' + fmtDate(u.last_seen_at) + '</span></td>' +
         '<td style="font-size:12px;color:var(--muted)">First: ' + esc(u.activated_ip || '—') +
           '<br>Last: ' + esc(u.last_ip || '—') + '<br>' + esc(u.ip_count || 0) + ' IP(s)</td>' +
+        '<td>' + privateCell + '</td>' +
         '<td>' + subCell + '</td>' +
         '<td><button class="btn btn-red btn-sm" onclick="confirmRevoke(&quot;' + esc(u.key) + '&quot;,&quot;' + esc(u.label || '') + '&quot;,&quot;' + esc(u.device || '') + '&quot;)">Revoke</button></td>' +
       '</tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 
 function setTrafficSort(key) {
@@ -1443,6 +1873,7 @@ function renderAnalytics(analytics) {
   var targets = mobile.top_targets || [];
   var flagged = mobile.flagged || [];
   var events = mobile.events || [];
+  var days = traffic.days || [];
 
   function sortedTrafficUsers() {
     var key = adminTrafficSort.key;
@@ -1468,12 +1899,15 @@ function renderAnalytics(analytics) {
     return '<th><button class="sort-btn" onclick="setTrafficSort(&quot;' + key + '&quot;)">' + label + arrow + '</button></th>';
   }
   function miniUser(row) {
+    var maxUser = Math.max(1, ...users.map(function(u){ return u.total || 0; }));
+    var pct = Math.max(2, Math.round((row.total || 0) / maxUser * 100));
     return '<tr>' +
       '<td>' + esc(row.label || row.key || '—') + '<br><span style="font-size:11px;color:var(--muted)">' +
         esc(row.device || '—') + ' · ' + esc(row.last_ip || '—') + '</span></td>' +
       '<td style="color:var(--teal)">' + fmtBytes(row.down || 0) + '</td>' +
       '<td style="color:var(--accent)">' + fmtBytes(row.up || 0) + '</td>' +
-      '<td>' + fmtBytes(row.total || 0) + '</td>' +
+      '<td><strong>' + fmtBytes(row.total || 0) + '</strong>' +
+        '<div class="mini-bar-track" style="margin-top:5px"><div class="mini-bar-fill" style="width:' + pct + '%"></div></div></td>' +
     '</tr>';
   }
   function targetRow(row) {
@@ -1486,6 +1920,21 @@ function renderAnalytics(analytics) {
       '<td style="color:var(--muted)">' + (labels || '—') + '</td>' +
     '</tr>';
   }
+  function targetResultsHtml() {
+    var targetNeedle = adminTargetSearch.trim().toLowerCase();
+    var filteredTargets = targets.filter(function(row) {
+      if (!targetNeedle) return true;
+      return String(row.target || '').toLowerCase().indexOf(targetNeedle) >= 0 ||
+        JSON.stringify(row.labels || '').toLowerCase().indexOf(targetNeedle) >= 0;
+    });
+    return filteredTargets.length
+      ? '<table class="keys-table"><thead><tr><th>Target</th><th>Hits</th><th>Ports</th><th>Users</th></tr></thead><tbody>' + filteredTargets.map(targetRow).join('') + '</tbody></table>'
+      : '<div class="key-empty">No matching mobile destination entries.</div>';
+  }
+  window.renderTargetResults = function() {
+    var el = document.getElementById('target-results');
+    if (el) el.innerHTML = targetResultsHtml();
+  };
   function eventLine(e) {
     return '<div class="log-line">' +
       '<span class="log-ts">' + fmtTime(e.time) + '</span>' +
@@ -1501,22 +1950,53 @@ function renderAnalytics(analytics) {
       '<div class="speed-cell"><div class="speed-cell-lbl">Upload</div><div class="speed-cell-val" style="color:var(--accent)">' + fmtBytes(traffic.total_up || 0) + '</div></div>' +
     '</div>' +
     '<div style="height:14px"></div>' +
-    '<div class="card-label">Hourly Traffic - Last 7 Days</div>' +
+    '<div class="card-label">Top Users - Last 7 Days</div>' +
+    (users.length
+      ? '<table class="keys-table"><thead><tr>' + trafficHead('user', 'User') + trafficHead('down', 'Download') + trafficHead('up', 'Upload') + trafficHead('total', 'Total') + '</tr></thead><tbody>' + sortedTrafficUsers().map(miniUser).join('') + '</tbody></table>'
+      : '<div class="key-empty">No traffic has been attributed to users yet.</div>') +
+    '<div style="height:14px"></div>' +
+    '<div class="chart-toolbar">' +
+      '<div class="card-label" style="margin-bottom:0">Daily Traffic - Last 7 Days</div>' +
+      '<span style="font-size:11px;color:var(--muted)"><span style="color:var(--teal)">&#9679;</span> Download <span style="color:var(--accent);margin-left:10px">&#9679;</span> Upload</span>' +
+    '</div>' +
+    '<div style="height:8px"></div>' +
+    '<div class="chart-frame"><canvas id="admin-daily-chart" style="height:150px"></canvas></div>' +
+    '<div style="height:14px"></div>' +
+    '<div class="chart-toolbar">' +
+      '<div class="card-label" style="margin-bottom:0">Hourly Traffic</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<div class="seg-control">' +
+          '<button class="seg-btn ' + (adminChartState.range === 24 ? 'active' : '') + '" onclick="setAdminChartRange(24)">24h</button>' +
+          '<button class="seg-btn ' + (adminChartState.range === 72 ? 'active' : '') + '" onclick="setAdminChartRange(72)">72h</button>' +
+          '<button class="seg-btn ' + (adminChartState.range === 168 ? 'active' : '') + '" onclick="setAdminChartRange(168)">7d</button>' +
+        '</div>' +
+        '<div class="seg-control">' +
+          '<button class="seg-btn ' + (adminChartState.metric === 'total' ? 'active' : '') + '" onclick="setAdminChartMetric(&quot;total&quot;)">Total</button>' +
+          '<button class="seg-btn ' + (adminChartState.metric === 'down' ? 'active' : '') + '" onclick="setAdminChartMetric(&quot;down&quot;)">Down</button>' +
+          '<button class="seg-btn ' + (adminChartState.metric === 'up' ? 'active' : '') + '" onclick="setAdminChartMetric(&quot;up&quot;)">Up</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div style="height:8px"></div>' +
     '<div class="speed-grid">' +
       '<div class="speed-cell"><div class="speed-cell-lbl">Hourly Total</div><div class="speed-cell-val">' + fmtBytes(hourly.total || 0) + '</div></div>' +
       '<div class="speed-cell"><div class="speed-cell-lbl">Peak Hour</div><div class="speed-cell-val" style="color:var(--teal)">' + fmtBytes((hourly.peak || {}).total || 0) + '</div></div>' +
       '<div class="speed-cell"><div class="speed-cell-lbl">Peak Time</div><div class="speed-cell-val" style="font-size:13px">' + fmtDate((hourly.peak || {}).hour) + '</div></div>' +
     '</div>' +
     '<div style="height:10px"></div>' +
-    '<canvas id="admin-hourly-chart" style="width:100%;height:220px;display:block;background:var(--bg);border:1px solid var(--border);border-radius:8px"></canvas>' +
-    '<div style="font-size:11px;color:var(--muted);margin-top:7px">Total traffic is shown in teal; upload is shown as a thin purple line. Data is stored hourly in traffic.sqlite3 for future analysis.</div>' +
+    '<div class="chart-frame"><canvas id="admin-hourly-chart" style="height:220px"></canvas></div>' +
+    '<div class="chart-readout" id="admin-hourly-readout">' +
+      '<div>Hour<strong>—</strong></div><div>Download<strong>—</strong></div><div>Upload<strong>—</strong></div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-top:7px">Hover the hourly chart to inspect exact values. Data is stored hourly in traffic.sqlite3 for future analysis.</div>' +
     '<div style="height:14px"></div>' +
     '<div class="info-box">Clash-based iPhone/Android/mac/windows traffic goes through the Network container, so destination hints come from mobile proxy logs. SSH runner fallback traffic remains destination-blind.</div>' +
     '<div style="height:14px"></div>' +
-    '<div class="card-label">Mobile Proxy Destinations</div>' +
-    (targets.length
-      ? '<table class="keys-table"><thead><tr><th>Target</th><th>Hits</th><th>Ports</th><th>Users</th></tr></thead><tbody>' + targets.map(targetRow).join('') + '</tbody></table>'
-      : '<div class="key-empty">No mobile destination log entries yet.</div>') +
+    '<div class="table-tools">' +
+      '<div class="card-label" style="margin-bottom:0">Mobile Proxy Destinations</div>' +
+      '<input value="' + esc(adminTargetSearch) + '" oninput="setTargetSearch(this.value)" placeholder="Search target or user">' +
+    '</div>' +
+    '<div id="target-results">' + targetResultsHtml() + '</div>' +
     '<div style="height:14px"></div>' +
     '<div class="card-label">Flagged Destination Hints</div>' +
     (flagged.length
@@ -1529,6 +2009,8 @@ function renderAnalytics(analytics) {
       : '<div class="key-empty">No recent mobile proxy events.</div>');
   setTimeout(function() {
     drawAdminHourlyTrafficChart((hourly.hours || []));
+    drawAdminDailyChart(days);
+    attachAdminChartEvents();
   }, 0);
 }
 
@@ -1608,6 +2090,27 @@ async function revokeKey(kid) {
     loadKeys(true);
   } catch(e) {
     alert('Error: ' + e.message);
+  }
+}
+
+async function togglePrivateVpn(kid, enabled, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    var r = await fetchT(API + '/api/admin/keys/' + encodeURIComponent(kid), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json', 'X-Root-Key': rootKey},
+      body: JSON.stringify({private_vpn: !!enabled}),
+    }, 12000);
+    var d = await r.json();
+    if (!d.ok) {
+      alert(d.error || 'Private VPN update failed');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    loadKeys(true);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    if (btn) btn.disabled = false;
   }
 }
 
