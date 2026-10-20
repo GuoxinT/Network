@@ -452,26 +452,11 @@ select {
       </div>
       <div class="card" style="margin-bottom:0">
         <div class="card-label">Session Info</div>
-        <div class="s-row"><span class="s-lbl">Current IP</span><span class="s-val" id="info-ip">—</span></div>
         <div class="s-row"><span class="s-lbl">Activated</span><span class="s-val" id="info-since">—</span></div>
       </div>
     </div>
     <div style="height:14px"></div>
 
-    <!-- connection log (live terminal window) -->
-    <div class="card">
-      <div class="card-label">Connection Log</div>
-      <div class="term">
-        <div class="term-bar">
-          <span class="term-dot" style="background:#ff5f57"></span>
-          <span class="term-dot" style="background:#febc2e"></span>
-          <span class="term-dot" style="background:#28c840"></span>
-          <span class="term-title">mynetwork — tunnel events</span>
-          <span class="term-live"><span class="pulse-dot" style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span> live</span>
-        </div>
-        <div class="term-body" id="conn-log"><div class="log-empty">Waiting for tunnel activity…</div></div>
-      </div>
-    </div>
 
     <!-- download -->
     <div class="card">
@@ -536,7 +521,7 @@ select {
 
         <div class="card">
           <div class="card-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-            <span>Destination Audit</span>
+            <span>Traffic Statistics</span>
             <button class="btn btn-ghost btn-sm" onclick="loadKeys(true)">&#8635; Refresh</button>
           </div>
           <div style="height:14px"></div>
@@ -800,7 +785,6 @@ var _statusTimer = null;
 var speedSamples = [];
 var usageChartState = {rows: [], hover: -1, selected: -1};
 var adminChartState = {range: 168, metric: 'total', hover: -1};
-var adminTargetSearch = '';
 
 function startStatusPoll() {
   if (_statusTimer) return;
@@ -1165,10 +1149,6 @@ function setAdminChartMetric(metric) {
   adminChartState.metric = metric;
   if (adminAnalyticsCache) renderAnalytics(adminAnalyticsCache);
 }
-function setTargetSearch(value) {
-  adminTargetSearch = value || '';
-  renderTargetResults();
-}
 function attachAdminChartEvents() {
   var c = document.getElementById('admin-hourly-chart');
   if (!c || c._boundAdminChart) return;
@@ -1259,38 +1239,8 @@ function renderStatus(d) {
   attachUsageChartEvents();
 
   // session info
-  document.getElementById('info-ip').textContent    = d.current_ip || d.last_ip || d.activated_ip || '—';
   document.getElementById('info-since').textContent = fmtDate(d.activated_at);
 
-  // connection log — newest first, console style
-  var log = document.getElementById('conn-log');
-  var ip  = d.current_ip || d.last_ip || d.activated_ip || 'this device';
-  if (!d.log || !d.log.length) {
-    if (d.mode === 'ios_shadowrocket' || d.mode === 'android_clash' || d.mode === 'desktop_clash') {
-      var mobileName = d.mode === 'ios_shadowrocket' ? 'iOS Shadowrocket'
-        : (d.mode === 'android_clash' ? 'Android Clash Meta' : 'Clash Verge');
-      log.innerHTML = '<div class="log-empty">'
-        + (d.connected ? '$ ' + mobileName + ' service is running. Seven-day usage is stored on the server.'
-                       : '$ ' + mobileName + ' is ready. No recent proxy traffic has reached this user port.')
-        + '</div>';
-      return;
-    }
-    log.innerHTML = '<div class="log-empty">'
-      + (d.connected ? '$ tunnel is up — waiting for the next event…'
-                     : '$ no tunnel activity yet — run your runner to connect.')
-      + '</div>';
-  } else {
-    log.innerHTML = d.log.map(function(e) {
-      var up = e.event === 'up';
-      return '<div class="log-line">' +
-        '<span class="log-ts">' + fmtTime(e.t) + '</span>' +
-        '<span class="' + (up ? 'log-up' : 'log-down') + '">' +
-          (up ? '● tunnel established  ' + esc(ip)
-              : '○ tunnel closed       ' + esc(ip)) +
-        '</span>' +
-      '</div>';
-    }).join('');
-  }
 }
 
 // ── download card (OS-detected) ───────────────────────
@@ -1726,16 +1676,7 @@ function renderDiagnostics(diag) {
     '<div class="health-cell"><div class="health-label">Pending</div><div class="health-value">' + esc(diag.pending_requests || 0) + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">requests waiting</div></div>' +
     '<div class="health-cell"><div class="health-label">Server Time</div><div class="health-value">' + fmtDate(diag.server_time) + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">UTC source</div></div>' +
     '<div class="health-cell"><div class="health-label">Config</div><div class="health-value">' + (diag.ss_config_exists ? 'Present' : 'Missing') + '</div><div style="font-size:11px;color:var(--muted);margin-top:4px">Shadowsocks JSON</div></div>' +
-    '</div>' +
-    '<div style="height:12px"></div>' +
-    '<div class="term"><div class="term-body">' +
-      '<div class="log-line"><span class="log-ts">clients</span><span class="log-down">' +
-        esc((diag.recent_clients || []).map(function(e){ return e.ip + ' ' + e.path + ' ' + e.status; }).join(' | ') || 'No recent client events') +
-      '</span></div>' +
-      '<div class="log-line"><span class="log-ts">errors</span><span class="log-down">' +
-        esc((diag.recent_errors || []).map(function(e){ return e.ip + ' ' + e.path + ' ' + e.status; }).join(' | ') || 'No recent API errors') +
-      '</span></div>' +
-    '</div></div>';
+    '</div>';
 }
 function setAdminFilter(filter) {
   adminFilter = filter;
@@ -1815,7 +1756,7 @@ function renderPrivateVpnPanel() {
         var port = enabled ? ('port ' + esc(u.private_vpn_port || 'pending')) : (u.private_vpn_locked_off ? 'manually off' : 'not assigned');
         return '<div class="private-panel-row">' +
           '<div class="private-panel-user"><strong>' + esc(u.label || u.key || '—') + '</strong>' +
-            '<span>' + esc(deviceLabel(u.device)) + ' · ' + esc(modeLabel(u.mode)) + ' · ' + esc(u.last_ip || 'no IP') + '</span></div>' +
+            '<span>' + esc(deviceLabel(u.device)) + ' · ' + esc(modeLabel(u.mode)) + '</span></div>' +
           '<div>' + status + '</div>' +
           '<div style="color:' + (enabled ? 'var(--teal)' : 'var(--muted)') + '">' + port + '</div>' +
           '<button class="btn ' + (enabled ? 'btn-ghost' : 'btn-accent') + ' btn-sm" onclick="togglePrivateVpn(&quot;' + esc(u.key) + '&quot;,' + (!enabled) + ',this)">' +
@@ -1847,7 +1788,7 @@ function renderUsers() {
     '<div class="table-scroll"><table class="keys-table"><thead><tr>' +
       userHead('label', 'User') + userHead('device', 'Device') + userHead('mode', 'Mode') +
       userHead('total', '7d Traffic') + userHead('last_seen_at', 'Last Active') +
-      '<th>IP Audit</th><th>MyNetwork</th><th>Subscription</th><th></th>' +
+      '<th>MyNetwork</th><th>Subscription</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map(function(u) {
       var sub = subscriptionForUser(u);
@@ -1876,8 +1817,6 @@ function renderUsers() {
           '<span style="color:var(--accent)">' + fmtBytes(u.up || 0) + '</span><br>' +
           '<strong>' + fmtBytes(u.total || 0) + '</strong></td>' +
         '<td>' + esc(fmtAgo(u.last_seen_at)) + '<br><span style="font-size:11px;color:var(--muted)">' + fmtDate(u.last_seen_at) + '</span></td>' +
-        '<td style="font-size:12px;color:var(--muted)">First: ' + esc(u.activated_ip || '—') +
-          '<br>Last: ' + esc(u.last_ip || '—') + '<br>' + esc(u.ip_count || 0) + ' IP(s)</td>' +
         '<td>' + privateCell + '</td>' +
         '<td>' + subCell + '</td>' +
         '<td><button class="btn btn-ghost btn-sm" style="margin-bottom:6px" onclick="copyRecoveryLink(&quot;' + esc(u.key) + '&quot;,this)">Recovery link</button><br>' +
@@ -1908,7 +1847,7 @@ function renderRequests(requests) {
   }
     wrap.innerHTML =
       '<table class="keys-table"><thead><tr>' +
-      '<th>Name</th><th>Type</th><th>Device</th><th>IP</th><th>Requested</th><th></th>' +
+      '<th>Name</th><th>Type</th><th>Device</th><th>Requested</th><th></th>' +
     '</tr></thead><tbody>' +
     entries.map(function(kv) {
       var rid = kv[0], info = kv[1];
@@ -1925,7 +1864,6 @@ function renderRequests(requests) {
         '<td>' + esc(info.name || '—') + '</td>' +
         '<td><span class="badge badge-muted">' + esc(kind) + '</span></td>' +
         '<td>' + deviceSelect + '</td>' +
-        '<td style="font-size:12px;color:var(--muted)">' + esc(info.client_ip || '—') + '</td>' +
         '<td style="font-size:12px;color:var(--muted)">' + fmtDate(info.created_at) + '</td>' +
         '<td>' +
           '<button class="btn btn-accent btn-sm" style="margin-right:6px" onclick="approveRequest(&quot;' + esc(rid) + '&quot;,this)">Approve</button>' +
@@ -1943,11 +1881,7 @@ function renderAnalytics(analytics) {
   adminAnalyticsCache = analytics;
   var traffic = analytics.traffic || {};
   var hourly = traffic.hourly_7d || {};
-  var mobile = analytics.mobile_audit || {};
   var users = traffic.top_users || [];
-  var targets = mobile.top_targets || [];
-  var flagged = mobile.flagged || [];
-  var events = mobile.events || [];
   var days = traffic.days || [];
 
   function sortedTrafficUsers() {
@@ -1978,44 +1912,12 @@ function renderAnalytics(analytics) {
     var pct = Math.max(2, Math.round((row.total || 0) / maxUser * 100));
     return '<tr>' +
       '<td>' + esc(row.label || row.key || '—') + '<br><span style="font-size:11px;color:var(--muted)">' +
-        esc(row.device || '—') + ' · ' + esc(row.last_ip || '—') + '</span></td>' +
+        esc(row.device || '—') + '</span></td>' +
       '<td style="color:var(--teal)">' + fmtBytes(row.down || 0) + '</td>' +
       '<td style="color:var(--accent)">' + fmtBytes(row.up || 0) + '</td>' +
       '<td><strong>' + fmtBytes(row.total || 0) + '</strong>' +
         '<div class="mini-bar-track" style="margin-top:5px"><div class="mini-bar-fill" style="width:' + pct + '%"></div></div></td>' +
     '</tr>';
-  }
-  function targetRow(row) {
-    var ports = (row.ports || []).map(function(p){ return esc(p[0]) + '×' + esc(p[1]); }).join(', ');
-    var labels = (row.labels || []).map(function(p){ return esc(p[0]) + '×' + esc(p[1]); }).join(', ');
-    return '<tr>' +
-      '<td style="font-family:monospace;font-size:12px">' + esc(row.target || '—') + '</td>' +
-      '<td>' + esc(row.count || 0) + '</td>' +
-      '<td style="color:var(--muted)">' + (ports || '—') + '</td>' +
-      '<td style="color:var(--muted)">' + (labels || '—') + '</td>' +
-    '</tr>';
-  }
-  function targetResultsHtml() {
-    var targetNeedle = adminTargetSearch.trim().toLowerCase();
-    var filteredTargets = targets.filter(function(row) {
-      if (!targetNeedle) return true;
-      return String(row.target || '').toLowerCase().indexOf(targetNeedle) >= 0 ||
-        JSON.stringify(row.labels || '').toLowerCase().indexOf(targetNeedle) >= 0;
-    });
-    return filteredTargets.length
-      ? '<table class="keys-table"><thead><tr><th>Target</th><th>Hits</th><th>Ports</th><th>Users</th></tr></thead><tbody>' + filteredTargets.map(targetRow).join('') + '</tbody></table>'
-      : '<div class="key-empty">No matching mobile destination entries.</div>';
-  }
-  window.renderTargetResults = function() {
-    var el = document.getElementById('target-results');
-    if (el) el.innerHTML = targetResultsHtml();
-  };
-  function eventLine(e) {
-    return '<div class="log-line">' +
-      '<span class="log-ts">' + fmtTime(e.time) + '</span>' +
-      '<span class="log-down">' + esc(e.label || e.client_ip || 'unknown') + ' -> ' +
-        esc(e.target || '—') + ':' + esc(e.port || '') + '</span>' +
-    '</div>';
   }
 
   wrap.innerHTML =
@@ -2063,25 +1965,7 @@ function renderAnalytics(analytics) {
     '<div class="chart-readout" id="admin-hourly-readout">' +
       '<div>Hour<strong>—</strong></div><div>Download<strong>—</strong></div><div>Upload<strong>—</strong></div>' +
     '</div>' +
-    '<div style="font-size:11px;color:var(--muted);margin-top:7px">Hover the hourly chart to inspect exact values. Data is stored hourly in traffic.sqlite3 for future analysis.</div>' +
-    '<div style="height:14px"></div>' +
-    '<div class="info-box">Clash-based iPhone/Android/mac/windows traffic goes through the Network container, so destination hints come from mobile proxy logs. SSH runner fallback traffic remains destination-blind.</div>' +
-    '<div style="height:14px"></div>' +
-    '<div class="table-tools">' +
-      '<div class="card-label" style="margin-bottom:0">Mobile Proxy Destinations</div>' +
-      '<input value="' + esc(adminTargetSearch) + '" oninput="setTargetSearch(this.value)" placeholder="Search target or user">' +
-    '</div>' +
-    '<div id="target-results">' + targetResultsHtml() + '</div>' +
-    '<div style="height:14px"></div>' +
-    '<div class="card-label">Flagged Destination Hints</div>' +
-    (flagged.length
-      ? '<div class="term"><div class="term-body">' + flagged.map(eventLine).join('') + '</div></div>'
-      : '<div class="key-empty">No keyword flags in recent mobile proxy logs.</div>') +
-    '<div style="height:14px"></div>' +
-    '<div class="card-label">Recent Mobile Proxy Events</div>' +
-    (events.length
-      ? '<div class="term"><div class="term-body">' + events.slice(0, 20).map(eventLine).join('') + '</div></div>'
-      : '<div class="key-empty">No recent mobile proxy events.</div>');
+    '<div style="font-size:11px;color:var(--muted);margin-top:7px">Only traffic totals are recorded. Destination addresses and client IP history are not collected.</div>';
   setTimeout(function() {
     drawAdminHourlyTrafficChart((hourly.hours || []));
     drawAdminDailyChart(days);

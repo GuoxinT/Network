@@ -7,11 +7,10 @@ import socket
 import struct
 import threading
 import time
-import traceback
 
 STATE = os.environ.get("PRIVATE_SOCKS_STATE", "/app/state")
 USERS_FILE = os.path.join(STATE, "users.json")
-LOG_DIR = os.path.join(STATE, "logs")
+LOG_DIR = os.path.join(STATE, "traffic")
 UPSTREAM_HOST = os.environ.get("PRIVATE_SOCKS_UPSTREAM_HOST", "127.0.0.1")
 UPSTREAM_PORT = int(os.environ.get("PRIVATE_SOCKS_UPSTREAM_PORT", "7890"))
 UPSTREAM_AUTH_PASSWORD = os.environ.get("PRIVATE_SOCKS_UPSTREAM_AUTH_PASSWORD", "schoolvpn-private-route")
@@ -19,26 +18,18 @@ BUFFER = 65536
 UDP_ASSOC_TTL = 180
 
 # Per-connection byte accounting. The portal (server.py) tails one log file per
-# listening port and bills the bytes to the key that owns that port. We mirror
-# ssserver's close-line grammar so a single parser covers both proxies, and we
-# log on *every* close (clean or error), unlike ssserver, so no bytes are lost.
+# listening port and bills the bytes to the key that owns that port.
+# Store only upload/download counts, never endpoints, usernames or timestamps.
 _log_lock = threading.Lock()
 
 
-def log_conn(port, expected, client_addr, host, dport, up_bytes, down_bytes):
+def log_conn(port, up_bytes, down_bytes):
     if up_bytes <= 0 and down_bytes <= 0:
         return
-    key = (expected or {}).get("username") or "unknown"
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        path = os.path.join(LOG_DIR, "user-%s-%s.log" % (port, key))
-        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        cip = client_addr[0] if client_addr else "?"
-        cport = client_addr[1] if client_addr else 0
-        # L2R = client→remote = upload; R2L = download.
-        line = ("%s tcp tunnel %s:%s <-> %s:%s closed, "
-                "L2R %d bytes, R2L %d bytes\n"
-                % (ts, cip, cport, host, dport, int(up_bytes), int(down_bytes)))
+        path = os.path.join(LOG_DIR, "user-%s.log" % port)
+        line = "%d %d\n" % (int(up_bytes), int(down_bytes))
         with _log_lock, open(path, "a") as f:
             f.write(line)
     except Exception:
@@ -228,7 +219,7 @@ def parse_host_port(authority, default_port):
     return authority, default_port
 
 
-def handle_http_proxy(client, expected, bind_port, client_addr):
+def handle_http_proxy(client, expected, bind_port):
     request_line, headers, rest = recv_http_head(client)
     route_user = check_basic_auth(headers, expected)
     if not route_user:
@@ -249,7 +240,7 @@ def handle_http_proxy(client, expected, bind_port, client_addr):
         try:
             relay(client, up, acct)
         finally:
-            log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
+            log_conn(bind_port, acct[0], acct[1])
         return
 
     # Plain HTTP proxy requests use absolute-form URLs. Convert to origin-form
@@ -279,7 +270,7 @@ def handle_http_proxy(client, expected, bind_port, client_addr):
     try:
         relay(client, up, acct)
     finally:
-        log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
+        log_conn(bind_port, acct[0], acct[1])
 
 
 def open_upstream_socks(route_user=None):
@@ -373,9 +364,9 @@ def udp_loop(sock, assocs, upstreams, lock):
                 else:
                     continue
             sock.sendto(data, target)
-        except Exception as exc:
-            print("private socks udp relay failed: %s" % exc, flush=True)
-            traceback.print_exc()
+        except Exception:
+            # Exception messages can contain destinations or client addresses.
+            pass
 
 
 def handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port, route_user):
@@ -407,7 +398,7 @@ def handle(client, expected, udp_sock, assocs, upstreams, lock, bind_port, clien
     try:
         first = client.recv(1, socket.MSG_PEEK)
         if first and first != b"\x05":
-            handle_http_proxy(client, expected, bind_port, client_addr)
+            handle_http_proxy(client, expected, bind_port)
             return
         route_user = auth_client(client, expected)
         req = recv_exact(client, 4)
@@ -422,14 +413,12 @@ def handle(client, expected, udp_sock, assocs, upstreams, lock, bind_port, clien
             try:
                 relay(client, up, acct)
             finally:
-                log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
+                log_conn(bind_port, acct[0], acct[1])
         elif req[1] == 3:
             handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port, route_user)
         else:
             raise OSError("only CONNECT and UDP ASSOCIATE are supported")
-    except Exception as exc:
-        print("private socks connection failed: %s" % exc, flush=True)
-        traceback.print_exc()
+    except Exception:
         try:
             client.close()
         except Exception:

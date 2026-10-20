@@ -6,6 +6,8 @@ services:
       - .env
     command: ["-d", "/root/.config/mihomo"]
     restart: unless-stopped
+    logging:
+      driver: "none"
     volumes:
       - ./state/mihomo/config.yaml:/root/.config/mihomo/config.yaml:ro
       - ./state/mihomo:/root/.config/mihomo
@@ -22,6 +24,8 @@ services:
       PRIVATE_SOCKS_UPSTREAM_HOST: private-vpn
       PRIVATE_SOCKS_UPSTREAM_PORT: "7890"
     restart: unless-stopped
+    logging:
+      driver: "none"
     ports:
       - "8600-8699:8600-8699/tcp"
       - "8600-8699:8600-8699/udp"

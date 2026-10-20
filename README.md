@@ -18,7 +18,7 @@ index.html
   Single-page UI for user request/dashboard and admin management
 
 keys.json
-  Root key, verify keys, request records, device metadata, IP audit history
+  Root key, verify keys, request records and device metadata (no IP history)
 
 traffic.sqlite3
   Persistent per-key daily and hourly traffic totals for charts and analysis
@@ -82,15 +82,16 @@ mac/windows SSH runner access does not depend on this container.
 Admin `/api/admin/keys` returns an `analytics` object used by the admin panel:
 
 - health diagnostics for Flask, the `Network` container, 8388 exposure, profile
-  pulls, pending requests, and recent API clients/errors
+  pulls and pending requests
 - consolidated user management data with status, device, mode, 7-day traffic,
-  last active time, IP audit data, and subscription links
+  last active time and subscription links
 - 7-day total traffic
 - recent 168-hour total traffic series, including peak hour metadata
 - top users by traffic
-- IP audit metadata
-- mobile proxy destination logs parsed from the `Network` container
-- keyword-based flagged destination hints
+
+Destination auditing, keyword classification, client IP history and HTTP request
+history have been removed. See [PRIVACY.md](PRIVACY.md) for the exact data retained
+and the separate encrypted-exit design.
 
 ### Traffic accounting framework
 
@@ -104,10 +105,10 @@ not reintroduce it.)
 
 | Transport | Where it runs | Authoritative byte source | Attribution |
 |-----------|---------------|---------------------------|-------------|
-| Shadowsocks (`ios_shadowrocket`, `android_clash`, `desktop_clash`) | `Network` container, one `ssserver` per user on ports `8400-8599` | `ssserver -vv` per-port logs — each connection's close line carries `L2R` (upload) / `R2L` (download) byte totals | **By listening port** (exact, one port = one key) |
-| MyNetwork outlet | `PrivateVPNProxy` container, custom SOCKS5 on ports `8600-8699` | `private_socks.py` writes the same close-line grammar to `state/logs/user-<port>-<key>.log`, on every close (clean **and** error) | **By listening port** |
+| Shadowsocks (`ios_shadowrocket`, `android_clash`, `desktop_clash`) | `Network` container, one `ssserver` per user on ports `8400-8599` | `ssserver -vv` output passes through `traffic_filter.py` in a pipe; only numeric upload/download counts reach `state/traffic/user-<port>.log` | **By listening port** (one port = one key) |
+| MyNetwork outlet | `PrivateVPNProxy` container, custom SOCKS5 on ports `8600-8699` | `private_socks.py` writes numeric counts to `state/traffic/user-<port>.log`, on every TCP close (clean **and** error) | **By listening port** |
 | Shared `8388` port | `Network` container | `shared-8388.log` | Bucketed to the synthetic key `__shared__` — one port with one shared password cannot be split per user |
-| SSH runner (legacy fallback) | host `sshd`, port 22 | host `ss -i` socket byte counters (`bytes_acked`/`bytes_received`) | **By client IP** → most-recent matching key |
+| SSH runner (legacy fallback) | host `sshd`, port 22 | host `ss -i` socket byte counters (`bytes_acked`/`bytes_received`) | Transient heartbeat IP → key mapping; expires after 120 seconds |
 
 Pipeline (see `server.py`):
 
@@ -135,10 +136,10 @@ Known limitations (intentional, documented):
   carry no byte totals in `ssserver` logs, so those bytes are not counted for
   Shadowsocks. The private proxy does not have this gap (it logs on every close).
 - **Long-lived connections** only contribute to live speed / totals when they
-  close, since logs are emitted at close. The DB total is eventually exact.
+  close. Abrupt process termination can lose counts; totals are best-effort.
 - **SSH runner** bytes are attributed by client IP; multiple keys behind one NAT
-  IP collapse onto the most-recent key. (No `ssh_runner` keys exist in current
-  deployments — all users are Shadowsocks-based.)
+  IP collapse onto the most-recent heartbeat key. Without recent authenticated
+  heartbeats, SSH bytes cannot be attributed.
 - **UDP** is metered for Shadowsocks (per-packet relay lines) but not yet for the
   private SOCKS proxy.
 - Proxy log files grow append-only. They are rotated by `ops/proxy-logs.logrotate`
@@ -156,38 +157,31 @@ Known limitations (intentional, documented):
   Truncation is safe: both writers append with `O_APPEND`, so post-truncate
   writes land at offset 0 (no sparse file), and server.py's tailer detects
   `size < offset` and resumes from 0. The log *content* is disposable — every
-  line is already folded into `traffic.sqlite3` in real time — so retention is
-  short and purely forensic. The only loss is the sub-second of unread lines
-  caught mid-rotation by `copytruncate`, which is negligible.
+  consumed line is folded into `traffic.sqlite3` — so retention is short.
+  `copytruncate` can lose unread counts during rotation. Startup skips existing
+  lines, so counts accumulated while the Web process is down are also lost.
 
 Pending requests can be corrected before approval by changing the device in the
 admin table. Revoke is the destructive access-removal action and is confirmed in
 the UI before deleting the verify key.
 
-Important visibility limitation:
+## Privacy and IP policy
 
-- mac/windows Clash Verge traffic goes through the `Network` Shadowsocks
-  container, like Android. The optional SSH runner fallback is inside an
-  encrypted SSH tunnel, so the server can measure volume and connection/IP
-  history for that fallback but not destination websites.
-- iPhone/Android traffic goes through the `Network` Shadowsocks container. The
-  server can parse destination host/IP information from mobile proxy logs,
-  especially failed/error connections. Logging is best-effort, not a complete
-  legal-grade browsing record.
-
-## IP Policy
-
-IP is audit-only. It must not be used as a hard lock.
-
-Reason: school Wi-Fi may move users between routers/NAT exits, so locking a key
-to the first source IP can block legitimate users. Current behavior records:
-
-- first IP: `activated_ip`
-- latest IP: `last_ip`
-- recent distinct IPs: `ip_history`
+The project does not retain client IP history, connection history or destinations.
+Existing `activated_ip`, `last_ip`, `ip_history` and request `client_ip` fields are
+removed at startup. Legacy SSH accounting uses only a short-lived in-memory map.
+Do not introduce IP locks: campus Wi-Fi can move users between routers/NAT exits.
 
 Sharing control should rely on hidden cookies, embedded runner keys, mobile
 profile tokens, and admin revoke.
+
+This change does **not** hide destinations from the campus operating system:
+Shadowsocks and SSH currently terminate there. The private outlet also accepts
+plain SOCKS/HTTP proxy traffic on the campus leg. Project logging is disabled,
+but external packet capture, system logs and privileged inspection are outside
+the application. The LAN-only client design in [PRIVACY.md](PRIVACY.md) moves
+decryption to an independent exit while retaining the campus server as a
+ciphertext relay. That architecture is not implemented in this update.
 
 ## Dashboard Exit Behavior
 
@@ -222,31 +216,27 @@ Admin `Revoke` remains the authoritative way to disable access.
 Use Docker on the CentOS 7 server where possible. Do not introduce command-line
 args for app configuration; use config files or environment variables.
 
-Typical redeploy:
+Privacy migration requires a maintenance window; a source upload alone does not
+change running services or erase historical data.
 
-```bash
-rsync -av server.py index.html README.md myserver:~/serverfetch/
-rsync -av Plugins/shadowsocks-ios-mode/ myserver:~/serverfetch/Plugins/shadowsocks-ios-mode/ --exclude state
+1. Transfer explicit source files using `rsync`/`scp`. Exclude runtime `state/`,
+   real `config.json`, `.env`, keys and SQLite data. Compare deployed templates
+   first; preserve server-only node settings.
+2. Stop the identified Web process and the three proxy containers. Do not remove
+   authorization data or traffic totals.
+3. With all old writers stopped, run `python3 ops/privacy_cleanup.py` from the
+   deployed project. This irreversibly deletes only recognized legacy project
+   proxy logs, clears project `server.log`, and removes IP history from keys.
+   It does not remove system logs, Docker archives or third-party copies.
+4. Rebuild `Network` to install `run-user.sh` and `traffic_filter.py`, rebuild
+   `PrivateVPNProxy`, regenerate the private Mihomo config, and recreate all
+   three proxy containers to apply Docker `logging.driver: none`.
+5. Start the Web process only after the new proxy scripts are available. Update
+   `ops/proxy-logs.logrotate`, verify health, and test approval, subscription
+   refresh, revoke, and numeric traffic accounting.
 
-ssh myserver 'cd ~/serverfetch/Plugins/shadowsocks-ios-mode && docker compose up -d --build'
-
-ssh myserver '
-  pid=$(pgrep -f "python3 server.py" | head -1)
-  test -n "$pid" && kill "$pid" || true
-  sleep 1
-  cd ~/serverfetch
-  nohup python3 server.py >> server.log 2>&1 < /dev/null &
-  sleep 2
-  curl -s http://127.0.0.1:5000/api/ping
-'
-```
-
-If the SSH command disconnects while killing/restarting Flask, reconnect and
-check:
-
-```bash
-ssh myserver 'pgrep -af "python3 server.py"; curl -s http://127.0.0.1:5000/api/ping'
-```
+Use the existing server Docker runtime for service workloads. Do not introduce
+encoded-code deployment or dynamic execution. See [HANDOFF.md](HANDOFF.md).
 
 ## API Summary
 
@@ -274,16 +264,18 @@ ssh myserver 'pgrep -af "python3 server.py"; curl -s http://127.0.0.1:5000/api/p
 
 ```bash
 python3 -m py_compile server.py
-node -e "const fs=require('fs'); const html=fs.readFileSync('index.html','utf8'); const js=html.match(/<script>([\\s\\S]*)<\\/script>/)[1]; new Function(js); console.log('js ok')"
+python3 -m unittest discover -s tests -v
+sed -n '/<script>/,/<\/script>/p' index.html | sed '1d;$d' | node --check
 ```
 
 ## Notes For Future Developers
 
 - Preserve hidden-key UX. Do not reintroduce visible verify-key entry for normal
   users unless the whole auth model is changed.
-- Keep IP audit-only. Do not restore hard first-IP locking for campus use.
+- Keep client IP history and destination auditing disabled. Do not restore hard
+  first-IP locking for campus use.
 - Internal names like `labvpn_key` and `labvpn-*` SSH authorized-key markers are
   compatibility details. They can be renamed later with a migration, but do not
   casually change them.
-- Mobile destination analytics are based on proxy logs and are incomplete by
-  design. Treat them as operational risk signals, not perfect browsing history.
+- Persist only numeric proxy counters; never pass raw diagnostic streams to
+  files or Docker logs. Keep deployment secrets out of Git.

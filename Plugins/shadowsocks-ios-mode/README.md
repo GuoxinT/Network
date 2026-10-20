@@ -13,7 +13,9 @@ faster iOS path compared with SSH Tunnel: iPhone -> Shadowrocket -> Shadowsocks
   ports and passwords. This directory must be writable by the server user.
 - `scripts/start.sh` - generate password if needed, build, and start.
 - `scripts/stop.sh` - stop the service.
-- `scripts/status.sh` - show service status and logs.
+- `scripts/status.sh` - show service status (Docker logging is disabled).
+- `scripts/run-user.sh` / `traffic_filter.py` - discard raw proxy diagnostics and
+  persist only upload/download byte counts in `state/traffic/`.
 - `scripts/show-shadowrocket.sh` - print the `ss://` import link.
 
 ## Start On Server
@@ -40,3 +42,5 @@ Copy the `ss://` link into Shadowrocket:
 - The `ss://` link contains the password. Do not share it publicly.
 - Open TCP and UDP `8388` and `8400-8599` if a firewall blocks clients.
 - This plugin is separate from the verify-key SSH runner system.
+- The campus server still decrypts proxy destinations. Disabling project logs is
+  not end-to-end privacy from that server; see the root `PRIVACY.md`.

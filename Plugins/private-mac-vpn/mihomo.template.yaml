@@ -2,7 +2,7 @@ mixed-port: 7890
 allow-lan: true
 bind-address: "*"
 mode: rule
-log-level: info
+log-level: silent
 ipv6: false
 external-controller: 0.0.0.0:9090
 

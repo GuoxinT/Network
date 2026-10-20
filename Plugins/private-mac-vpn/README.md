@@ -28,14 +28,18 @@ Normal MyNetwork users keep using the existing `Network` container and ports
 
 ### Traffic accounting
 
-`private_socks.py` counts the bytes of every relayed TCP connection and appends a
-close line — `... tcp tunnel <client>:<port> <-> <host>:<port> closed, L2R <up>
-bytes, R2L <down> bytes` — to `state/logs/user-<port>-<key>.log` (one file per
-listening port). This mirrors `ssserver`'s grammar, so `server.py`'s
-`_process_proxy_logs()` tails it with the same parser and bills the bytes to the
-key that owns the port. Lines are written on **every** close, including errors, so
-no bytes are lost. UDP relay is not yet metered. See the root `README.md`
+`private_socks.py` counts relayed TCP bytes and appends only `<up> <down>` to
+`state/traffic/user-<port>.log` (one file per listening port). No client address,
+destination, timestamp or credential is written. `server.py` attributes these
+counts to the key that owns the port. Lines are written on clean and error
+closes; abrupt process termination can still lose counts. UDP relay is not yet
+metered. Mihomo uses silent logging and both containers disable Docker log
+storage. See the root `README.md`
 "Traffic accounting framework" section for the full pipeline.
+
+The campus-facing SOCKS/HTTP connection is not an encrypted client-to-exit tunnel.
+Removing project logs does not prevent privileged observation of its traffic.
+See the root `PRIVACY.md` for the proposed independent-exit architecture.
 
 ## Setup
 

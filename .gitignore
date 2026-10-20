@@ -1,6 +1,7 @@
 # ── Secrets (never commit) ───────────────────────────────────────────────
-# Root key, verify keys, request records, device metadata, IP audit history
+# Root key, verify keys, request records and device metadata
 keys.json
+keys.privacy-tmp
 # Per-user ed25519 SSH keypairs for mac/windows runner mode
 keys/
 # Live Shadowsocks credentials (commit config.example.json instead)

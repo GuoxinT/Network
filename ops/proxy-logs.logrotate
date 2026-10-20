@@ -13,11 +13,10 @@
 # at the real end (offset 0), never creating a sparse hole. server.py's tailer
 # notices size < its saved offset and resumes reading from 0.
 #
-# The log *content* is disposable — server.py has already folded each line into
-# traffic.sqlite3 in real time — so retention is short and purely forensic.
+# Files now contain only upload/download counts; no endpoints or timestamps.
 
-/home/user1/serverfetch/Plugins/shadowsocks-ios-mode/state/logs/*.log
-/home/user1/serverfetch/Plugins/private-mac-vpn/state/logs/*.log {
+/home/user1/serverfetch/Plugins/shadowsocks-ios-mode/state/traffic/*.log
+/home/user1/serverfetch/Plugins/private-mac-vpn/state/traffic/*.log {
     daily
     maxsize 50M
     rotate 3

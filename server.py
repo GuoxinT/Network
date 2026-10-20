@@ -1,37 +1,29 @@
 #!/usr/bin/env python3
-"""ServerFetch MyNetwork — server.py
+"""MyNetwork access portal and per-authorization traffic totals.
 
-Runs on the lab machine. Generates a per-user SSH key, serves a tiny runner
-that opens an SSH SOCKS5 tunnel, and — because every tunnel terminates here —
-measures each user's live throughput / data-flow / connect history server-side.
-That means the runner needs nothing but a built-in `ssh` (no Python on the
-client), and the dashboard still shows real stats for every user.
+No destination audit, HTTP access history or persistent client IP history.
 """
 import os, re, json, time, shutil, secrets, threading, subprocess, base64, pwd, sqlite3
-from collections import deque
 from datetime import datetime, timedelta
 from urllib.parse import quote
 from flask import Flask, request, jsonify, Response, send_file, abort
 from flask_cors import CORS
+from werkzeug.serving import WSGIRequestHandler
 
 app = Flask(__name__)
 CORS(app)
-_HTTP_EVENTS = deque(maxlen=120)
 
-@app.after_request
-def _remember_http_event(resp):
-    try:
-        path = request.path or ''
-        if not path.startswith('/api/admin'):
-            _HTTP_EVENTS.appendleft({
-                'time': _now_iso(),
-                'ip': request.remote_addr,
-                'path': path,
-                'status': resp.status_code,
-            })
-    except Exception:
+class PrivacyRequestHandler(WSGIRequestHandler):
+    def log(self, type, message, *args):
+        # Werkzeug access/error lines may contain IPs, request URLs and tokens.
         pass
-    return resp
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'ok': False, 'error': 'Internal server error'}), 500
+
+# Do not serialize request exceptions (which can contain URLs or credentials).
+app.logger.disabled = True
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 KEYS_FILE   = os.path.join(BASE_DIR, 'keys.json')
@@ -39,11 +31,11 @@ KEYS_DIR    = os.path.join(BASE_DIR, 'keys')
 SS_CONFIG   = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'config.json')
 SS_USERS    = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'users.json')
 SS_CONFIG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'ssserver.d')
-SS_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'logs')
+SS_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 'traffic')
 PRIVATE_VPN_CONFIG = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'config.json')
 PRIVATE_VPN_USERS = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'users.json')
 PRIVATE_VPN_CONFIG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'ssserver.d')
-PRIVATE_VPN_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'logs')
+PRIVATE_VPN_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'traffic')
 TRAFFIC_DB  = os.path.join(BASE_DIR, 'traffic.sqlite3')
 SSH_USER    = os.environ.get('SSH_USER',    'user1')
 SERVER_HOST = os.environ.get('SERVER_HOST', '10.1.4.43')
@@ -127,10 +119,7 @@ def _init():
         root_key = 'ROOT-' + secrets.token_hex(12).upper()
         data = {'root_key': root_key, 'verify_keys': {}, 'requests': {}}
         _save(data)
-        print('\n' + '=' * 60)
-        print('  ROOT KEY (save this — it cannot be recovered!)')
-        print(f'  {root_key}')
-        print('=' * 60 + '\n')
+        print('Created keys.json. Read the root key from this protected file.')
     elif os.path.exists(KEYS_FILE):
         data.setdefault('verify_keys', {})
         data.setdefault('requests', {})
@@ -138,6 +127,14 @@ def _init():
             os.chmod(KEYS_FILE, 0o600)
         except OSError:
             pass
+    changed = False
+    for entry in list(data.get('verify_keys', {}).values()) + list(data.get('requests', {}).values()):
+        for field in ('activated_ip', 'last_ip', 'ip_history', 'client_ip'):
+            if field in entry:
+                del entry[field]
+                changed = True
+    if changed:
+        _save(data)
     return data
 
 DATA = _init()
@@ -173,9 +170,6 @@ def _request_host(default=SERVER_HOST):
     if not host or host in ('127.0.0.1', 'localhost'):
         return default
     return host
-
-def _is_loopback_ip(ip):
-    return ip in ('127.0.0.1', '::1', 'localhost')
 
 def _norm_device(device):
     d = (device or '').strip().lower()
@@ -255,8 +249,7 @@ def _local_hour(dt=None):
 
 # In-memory accrual of byte deltas keyed by key id. The sampler adds to this
 # every 0.5 s; a flusher writes it to SQLite in one transaction every few
-# seconds. This is the single source of truth for billing — it is fed only by
-# socket byte counters (see _monitor_loop), never by parsing connection logs.
+# seconds. Inputs are sanitized proxy counts and transient SSH socket deltas.
 _pending_traffic = {}
 
 def _accrue_traffic(kid, down_bytes, up_bytes):
@@ -345,52 +338,19 @@ def _create_verify_key(label, device=None, mode=None):
         'created_at':   datetime.utcnow().isoformat(),
         'activated':    False,
         'activated_at': None,
-        'activated_ip': None,
-        'last_ip':      None,
-        'ip_history':   [],
     }
     return kid
 
-def _record_key_ip(entry, client_ip, activate=False):
-    if not client_ip:
-        return False
+def _record_key_activity(entry, activate=False):
     changed = False
     if activate and not entry.get('activated'):
         entry['activated'] = True
         entry['activated_at'] = datetime.utcnow().isoformat()
         changed = True
-    if _is_loopback_ip(client_ip):
-        age = _iso_age_seconds(entry.get('last_seen_at'))
-        if age is None or age > 60:
-            entry['last_seen_at'] = _now_iso()
-            changed = True
-        return changed
-    if not entry.get('activated_ip'):
-        entry['activated_ip'] = client_ip
-        changed = True
-    if entry.get('last_ip') != client_ip:
-        entry['last_ip'] = client_ip
-        changed = True
-    hist = entry.setdefault('ip_history', [])
-    if client_ip not in hist:
-        hist.append(client_ip)
-        del hist[:-20]
-        changed = True
     age = _iso_age_seconds(entry.get('last_seen_at'))
     if age is None or age > 60:
         entry['last_seen_at'] = _now_iso()
         changed = True
-    return changed
-
-def _mark_key_seen(entry, client_ip=None):
-    changed = False
-    if client_ip:
-        changed = _record_key_ip(entry, client_ip) or changed
-    else:
-        age = _iso_age_seconds(entry.get('last_seen_at'))
-        if age is None or age > 60:
-            entry['last_seen_at'] = _now_iso()
-            changed = True
     return changed
 
 def _mark_ios_key_active(kid, req):
@@ -419,7 +379,7 @@ def _mark_ios_key_active(kid, req):
     if not entry.get('profile_token'):
         entry['profile_token'] = secrets.token_urlsafe(24)
         changed = True
-    changed = _record_key_ip(entry, req.get('client_ip'), activate=True) or changed
+    changed = _record_key_activity(entry, activate=True) or changed
     return changed
 
 def _repair_approved_ios_keys():
@@ -477,7 +437,7 @@ def _ss_config_name(kid, port):
     return ('user-%s-%s.json' % (int(port), safe_key))[:90]
 
 def _ss_log_name(kid, port):
-    return _ss_config_name(kid, port).rsplit('.', 1)[0] + '.log'
+    return 'user-%s.log' % int(port)
 
 def _write_ssserver_config(path, port, password, method, cfg_path=SS_CONFIG):
     try:
@@ -510,7 +470,7 @@ def _ensure_ss_process(kid, entry):
     name = _ss_config_name(kid, port)
     host_path = os.path.join(SS_CONFIG_DIR, name)
     container_path = '/app/state/ssserver.d/' + name
-    container_log = '/app/state/logs/' + _ss_log_name(kid, port)
+    container_log = '/app/state/traffic/' + _ss_log_name(kid, port)
     _write_ssserver_config(host_path, port, entry.get('ss_password'), entry.get('ss_method') or _ss_method())
     try:
         check = subprocess.run(
@@ -521,14 +481,13 @@ def _ensure_ss_process(kid, entry):
         )
         if check.returncode == 0:
             return True
-        subprocess.run(
-            ['docker', 'exec', '-d', MOBILE_PROXY_CONTAINER, 'sh', '-lc',
-             "while true; do ssserver -vv -c %s 2>&1 | awk '/tcp tunnel .* closed|udp relay .* with [0-9]+ bytes/ { print; fflush(); }' >> %s; echo \"$(date -u +%%FT%%TZ) ssserver exited for %s; restarting in 1s\" >> %s; sleep 1; done"
-             % (sh_quote(container_path), sh_quote(container_log), sh_quote(container_path), sh_quote(container_log))],
+        started = subprocess.run(
+            ['docker', 'exec', '-d', MOBILE_PROXY_CONTAINER,
+             '/app/scripts/run-user.sh', container_path, container_log],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             universal_newlines=True, timeout=6,
         )
-        return True
+        return started.returncode == 0
     except Exception:
         return False
 
@@ -1043,7 +1002,7 @@ tun:
 mixed-port: 7890
 allow-lan: false
 mode: rule
-log-level: info
+log-level: silent
 ipv6: false
 
 dns:
@@ -1184,7 +1143,7 @@ def _auth_sync():
     print(f'[auth] synced {len(DATA.get("verify_keys", {})) - len(missing)} key(s) '
           f'to {path} for SSH user {SSH_USER}')
     if missing:
-        print('[auth] WARNING: missing private/public key files for: ' + ', '.join(missing))
+        print('[auth] WARNING: missing key files for %d authorization(s)' % len(missing))
 
 def _kick_ssh_sessions():
     """Terminate current SSH sessions for SSH_USER after a revoke.
@@ -1212,25 +1171,13 @@ def _kick_ssh_sessions():
 
 # ── Throughput monitor & traffic accounting ──────────────────────────────────
 #
-# Single source of truth: TCP socket byte counters. Every proxy port (each
-# user's Shadowsocks port, each user's MyNetwork port, the shared port, and
-# the legacy SSH port) terminates on this machine, so `ss -i` exposes the real
-# per-socket cumulative byte counters. We sample twice a second, diff each
-# socket against its previous reading, attribute the delta to a key by the
-# *listening port* it terminates on, and both (a) update live speed/session
-# stats and (b) accrue it for periodic persistence to SQLite.
-#
-# Why counters and not the ssserver connection log: the log only emits totals
-# when a connection *closes*, so it loses every connection that closes on error
-# (RST) and lags badly on long-lived connections, while a close burst divided by
-# the sampling interval produces absurd instantaneous speeds. Counters are
-# continuous, survive errors, and measure the bytes the access link actually
-# carried. From the server's point of view: bytes it *sends* to the client =
-# the user's download; bytes it *receives* = the user's upload.
+# Container proxies write only upload/download counts. SSH fallback uses live
+# socket counters with short-lived heartbeat attribution. Neither source writes
+# client IPs or destinations to persistent storage.
 
 _mon_lock  = threading.Lock()
 _ip_stats  = {}   # ip -> live stats dict
-_ip_logs   = {}   # ip -> deque[{t, event}]
+_ssh_clients = {} # transient heartbeat attribution only; never serialized
 _key_stats = {}   # key id -> live proxy stats dict
 _sock_prev = {}   # socket key -> (sent, recv) from the previous sample
 _log_offsets = {} # log path -> byte offset already consumed
@@ -1244,27 +1191,8 @@ _key_tick  = {}   # key id -> [down, up] bytes seen in the current sample window
 _RE_SENT  = re.compile(r'bytes_sent:(\d+)')
 _RE_ACKED = re.compile(r'bytes_acked:(\d+)')
 _RE_RECV  = re.compile(r'bytes_received:(\d+)')
-# Per-connection close lines emitted by ssserver (Shadowsocks) and by our
-# private SOCKS proxy. L2R = local→remote = the user's upload; R2L = the
-# download. Both proxies run inside containers, so their own logs — not host
-# socket counters — are the authoritative byte source for these transports.
-_RE_TCP_CLOSED = re.compile(
-    r'tcp tunnel (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+<->\s+.+?\s+closed,\s+L2R\s+(?P<up>\d+)\s+bytes,\s+R2L\s+(?P<down>\d+)\s+bytes'
-)
-_RE_UDP_RELAY = re.compile(
-    r'udp relay (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+(?P<dir>->|<-)\s+.+?\s+with\s+(?P<bytes>\d+)\s+bytes'
-)
-# Used only by the destination-audit feature (which reads `docker logs`), not by
-# traffic accounting.
-_RE_MOBILE_TARGET = re.compile(
-    r'(?P<t>\d{4}-\d\d-\d\dT[^\s]+Z).*?\btunnel\s+'
-    r'(?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+->\s+'
-    r'(?P<target>\[[^\]]+\]|[^:\s]+):(?P<port>\d+)\s*(?P<msg>.*)$'
-)
-_SUSPICIOUS_HINTS = (
-    'porn', 'adult', 'casino', 'gamble', 'bet365', 'torrent', 'tracker',
-    'bitcomet', 'utorrent', 'xunlei', 'sex', 'onlyfans',
-)
+# Only sanitized "<upload> <download>" records are accepted.
+_RE_TRAFFIC_COUNTS = re.compile(r'^(\d+) (\d+)\n?$')
 
 # `ss` lives in /usr/sbin, which is often missing from a daemon's PATH.
 _SS = (shutil.which('ss') or next(
@@ -1274,48 +1202,12 @@ def _new_stat():
     return {'connected': False, 'down_bps': 0, 'up_bps': 0,
             'sess_down': 0, 'sess_up': 0, 'since': None}
 
-def _keys_for_ip(ip, mode=None):
-    out = []
-    for kid, entry in DATA.get('verify_keys', {}).items():
-        known_ips = set(entry.get('ip_history') or [])
-        if entry.get('activated_ip'):
-            known_ips.add(entry.get('activated_ip'))
-        if entry.get('last_ip'):
-            known_ips.add(entry.get('last_ip'))
-        if ip not in known_ips:
-            continue
-        if mode and entry.get('mode', 'ssh_runner') != mode:
-            continue
-        out.append(kid)
-    return out
-
-def _key_for_client_ip(ip):
-    matches = _keys_for_ip(ip)
-    if not matches:
-        return None, None
-    kid = matches[0]
-    return kid, DATA.get('verify_keys', {}).get(kid, {})
-
 def _best_key_for_ip(ip, modes):
-    candidates = []
-    for kid, entry in DATA.get('verify_keys', {}).items():
-        if entry.get('mode', 'ssh_runner') not in modes:
-            continue
-        known_ips = set(entry.get('ip_history') or [])
-        if entry.get('activated_ip'):
-            known_ips.add(entry.get('activated_ip'))
-        if entry.get('last_ip'):
-            known_ips.add(entry.get('last_ip'))
-        if ip not in known_ips:
-            continue
-        recency = (entry.get('last_seen_at') or entry.get('last_profile_at')
-                   or entry.get('last_download') or entry.get('activated_at')
-                   or entry.get('created_at') or '')
-        candidates.append((recency, kid, entry))
-    if not candidates:
-        return None, None
-    candidates.sort(reverse=True)
-    return candidates[0][1], candidates[0][2]
+    kid, seen = _ssh_clients.get(ip, (None, 0))
+    entry = DATA.get('verify_keys', {}).get(kid)
+    if entry and time.monotonic() - seen < 120 and entry.get('mode', 'ssh_runner') in modes:
+        return kid, entry
+    return None, None
 
 def _key_for_ss_port(port):
     """Map a monitored listening port back to the key that owns it. Each key has
@@ -1361,8 +1253,6 @@ def _traffic_admin_summary():
             'down': totals['down'],
             'up': totals['up'],
             'total': total,
-            'last_ip': entry.get('last_ip') or entry.get('activated_ip'),
-            'ip_count': len(entry.get('ip_history') or []),
         })
     users.sort(key=lambda x: x['total'], reverse=True)
     total_down = sum(row['down'] for row in per_day.values())
@@ -1423,9 +1313,6 @@ def _admin_users():
             'activated_at': entry.get('activated_at'),
             'last_seen_at': entry.get('last_seen_at') or entry.get('last_download') or entry.get('activated_at'),
             'last_download': entry.get('last_download'),
-            'activated_ip': entry.get('activated_ip'),
-            'last_ip': entry.get('last_ip') or entry.get('activated_ip'),
-            'ip_count': len(entry.get('ip_history') or []),
             'download_count': entry.get('download_count', 0),
             'down': int(totals.get('down') or 0),
             'up': int(totals.get('up') or 0),
@@ -1445,60 +1332,6 @@ def _admin_users():
     users.sort(key=lambda row: (row.get('last_seen_at') or row.get('created_at') or ''), reverse=True)
     return users
 
-def _mobile_destination_audit():
-    try:
-        r = subprocess.run(
-            ['docker', 'logs', '--tail=800', MOBILE_PROXY_CONTAINER],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True, timeout=4,
-        )
-        lines = (r.stdout or '').splitlines()
-    except Exception as e:
-        return {'events': [], 'top_targets': [], 'flagged': [],
-                'error': str(e), 'source': MOBILE_PROXY_CONTAINER}
-
-    targets = {}
-    events = []
-    flagged = []
-    for ln in lines:
-        m = _RE_MOBILE_TARGET.search(ln)
-        if not m:
-            continue
-        client = m.group('client').strip('[]')
-        target = m.group('target').strip('[]')
-        port = int(m.group('port'))
-        kid, entry = _key_for_client_ip(client)
-        event = {
-            'time': m.group('t'),
-            'client_ip': client,
-            'target': target,
-            'port': port,
-            'message': (m.group('msg') or '').strip()[:160],
-            'key': kid or '',
-            'label': (entry or {}).get('label', ''),
-            'device': (entry or {}).get('device', ''),
-        }
-        events.append(event)
-        item = targets.setdefault(target, {'target': target, 'count': 0, 'ports': {}, 'labels': {}})
-        item['count'] += 1
-        item['ports'][str(port)] = item['ports'].get(str(port), 0) + 1
-        if event['label']:
-            item['labels'][event['label']] = item['labels'].get(event['label'], 0) + 1
-        low = target.lower()
-        if any(h in low for h in _SUSPICIOUS_HINTS):
-            flagged.append(event)
-
-    top = sorted(targets.values(), key=lambda x: x['count'], reverse=True)[:20]
-    for item in top:
-        item['ports'] = sorted(item['ports'].items(), key=lambda kv: kv[1], reverse=True)[:4]
-        item['labels'] = sorted(item['labels'].items(), key=lambda kv: kv[1], reverse=True)[:4]
-    return {
-        'events': events[-60:][::-1],
-        'top_targets': top,
-        'flagged': flagged[-30:][::-1],
-        'source': MOBILE_PROXY_CONTAINER,
-    }
-
 def _run_diag(cmd, timeout=3):
     try:
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1517,16 +1350,6 @@ def _admin_diagnostics():
         if ts and ts > recent_profile:
             recent_profile = ts
     pending = [r for r in DATA.get('requests', {}).values() if (r.get('status') or 'pending') == 'pending']
-    recent_clients = []
-    seen_ips = set()
-    for ev in list(_HTTP_EVENTS):
-        ip = ev.get('ip')
-        if ip and ip not in seen_ips:
-            seen_ips.add(ip)
-            recent_clients.append(ev)
-        if len(recent_clients) >= 5:
-            break
-    recent_errors = [ev for ev in list(_HTTP_EVENTS) if int(ev.get('status') or 0) >= 400][:8]
     return {
         'server_time': _now_iso(),
         'flask_online': True,
@@ -1541,30 +1364,16 @@ def _admin_diagnostics():
         'profile_last_request_at': recent_profile,
         'pending_requests': len(pending),
         'key_count': len(DATA.get('verify_keys', {})),
-        'recent_clients': recent_clients,
-        'recent_errors': recent_errors,
     }
 
 def _admin_analytics():
     return {
         'traffic': _traffic_admin_summary(),
-        'mobile_audit': _mobile_destination_audit(),
         'diagnostics': _admin_diagnostics(),
-        'visibility': {
-            'ssh_runner_destinations': False,
-            'mobile_proxy_destinations': True,
-        },
     }
 
-def _log_event(ip, event):
-    _ip_logs.setdefault(ip, deque(maxlen=50)).appendleft(
-        {'t': datetime.utcnow().isoformat(), 'event': event})
-
 def _key_for_log_file(name):
-    """Map a proxy log filename to the key it bills. ssserver and the private
-    proxy both name their per-port logs `user-<port>-<...>.log`; the shared
-    Shadowsocks port logs to `shared-<port>...log`. Attribution is purely by
-    listening port — the client/target inside each line is for audit only."""
+    """Attribute user-<port>.log or shared-<port>.log without reading endpoints."""
     m = re.match(r'(user|shared)-(\d+)', name)
     if not m:
         return None
@@ -1597,20 +1406,11 @@ def _process_proxy_logs():
                 with open(path, 'r', errors='ignore') as f:
                     f.seek(pos)
                     for ln in f:
-                        m = _RE_TCP_CLOSED.search(ln)
+                        m = _RE_TRAFFIC_COUNTS.fullmatch(ln)
                         if m:
                             slot = agg.setdefault(kid, [0, 0])
-                            slot[0] += int(m.group('down'))
-                            slot[1] += int(m.group('up'))
-                            continue
-                        m = _RE_UDP_RELAY.search(ln)
-                        if m:
-                            n = int(m.group('bytes'))
-                            slot = agg.setdefault(kid, [0, 0])
-                            if m.group('dir') == '->':
-                                slot[1] += n          # client→target = upload
-                            else:
-                                slot[0] += n          # download
+                            slot[0] += int(m.group(2))
+                            slot[1] += int(m.group(1))
                     _log_offsets[path] = f.tell()
             except Exception:
                 continue
@@ -1751,7 +1551,6 @@ def _monitor_loop():
                     if not was:                       # new session
                         st['sess_down'] = st['sess_up'] = 0
                         st['since'] = now_iso
-                        _log_event(ip, 'up')
                     # accurate per-second rate; session totals get the raw bytes
                     st['down_bps'] = d[0] / dt
                     st['up_bps']   = d[1] / dt
@@ -1762,10 +1561,13 @@ def _monitor_loop():
                         if kid:
                             _accrue_traffic(kid, delta[(SSH_PORT, ip)][0], delta[(SSH_PORT, ip)][1])
                 else:
-                    if was:
-                        _log_event(ip, 'down')
                     st['down_bps'] = st['up_bps'] = 0
                 st['connected'] = now_c
+                if not now_c:
+                    _ip_stats.pop(ip, None)
+            for ip, (_kid, seen) in list(_ssh_clients.items()):
+                if time.monotonic() - seen >= 120:
+                    _ssh_clients.pop(ip, None)
 
         flush_tick += 1
         if flush_tick >= FLUSH_EVERY:
@@ -1984,15 +1786,13 @@ def admin_revoke(kid):
 # ── User endpoints ───────────────────────────────────────────────────────────
 
 def _entry_for(kid, client_ip):
-    """Resolve a verify-key. Returns (entry, error_response).
-
-    IP addresses are audit data only. Campus Wi-Fi may move users between
-    routers/NAT exits, so we do not reject a valid hidden key solely because
-    the source IP changed.
-    """
+    """Resolve authorization; keep only transient IP attribution for SSH."""
     if kid not in DATA['verify_keys']:
         return None, (jsonify({'ok': False, 'error': 'Invalid key'}), 401)
     entry = DATA['verify_keys'][kid]
+    if client_ip and entry.get('mode', 'ssh_runner') == 'ssh_runner':
+        with _mon_lock:
+            _ssh_clients[client_ip] = (kid, time.monotonic())
     return entry, None
 
 def _verify_key_from_request():
@@ -2007,7 +1807,7 @@ def recover_session():
     if not kid:
         return jsonify({'ok': False, 'error': 'Recovery link is invalid or expired'}), 401
     next_token = _ensure_dashboard_token(entry, rotate=True)
-    _record_key_ip(entry, request.remote_addr, activate=True)
+    _record_key_activity(entry, activate=True)
     _save(DATA)
     resp = jsonify({'ok': True, 'recovery_token': next_token})
     return _set_user_cookie(resp, kid)
@@ -2025,7 +1825,6 @@ def request_key():
         'name': name[:80],
         'device': device,
         'kind': kind,
-        'client_ip': request.remote_addr,
         'created_at': datetime.utcnow().isoformat(),
         'status': 'pending',
         'key': None,
@@ -2111,7 +1910,7 @@ def validate_key():
     entry, err = _entry_for(kid, request.remote_addr)
     if err:
         return err
-    if _record_key_ip(entry, request.remote_addr):
+    if _record_key_activity(entry):
         _save(DATA)
     had_dashboard_token = bool(entry.get('dashboard_token'))
     recovery_token = _ensure_dashboard_token(entry)
@@ -2128,7 +1927,7 @@ def user_status():
     entry, err = _entry_for(kid, request.remote_addr)
     if err:
         return err
-    changed = _record_key_ip(entry, request.remote_addr)
+    changed = _record_key_activity(entry)
     had_dashboard_token = bool(entry.get('dashboard_token'))
     recovery_token = _ensure_dashboard_token(entry)
     if changed or not had_dashboard_token:
@@ -2136,7 +1935,6 @@ def user_status():
     ip = request.remote_addr
     with _mon_lock:
         st  = dict(_ip_stats.get(ip) or _new_stat())
-        log = list(_ip_logs.get(ip, []))
     mode = entry.get('mode', 'ssh_runner')
     device = entry.get('device', 'windows')
     if mode == 'ssh_runner' and device in ('mac', 'windows'):
@@ -2157,13 +1955,12 @@ def user_status():
                 st['up_bps'] = 0
         if not service_up:
             st.update({'connected': False, 'down_bps': 0, 'up_bps': 0})
-        log = []
     clash_config_url = clash_import_url = None
     shadowrocket_url = None
     if mode in ('android_clash', 'desktop_clash') or (mode == 'ssh_runner' and device in ('mac', 'windows')):
         had_profile_token = bool(entry.get('profile_token'))
         clash_config_url, clash_import_url = _clash_profile_urls(kid)
-        if (not had_profile_token) or _record_key_ip(entry, request.remote_addr, activate=True):
+        if (not had_profile_token) or _record_key_activity(entry, activate=True):
             _save(DATA)
     elif mode == 'ios_shadowrocket':
         try:
@@ -2180,10 +1977,6 @@ def user_status():
         'shadowrocket_url': shadowrocket_url,
         'activated':      entry['activated'],
         'activated_at':   entry.get('activated_at'),
-        'activated_ip':   entry.get('activated_ip'),
-        'last_ip':        entry.get('last_ip') or ip,
-        'current_ip':     ip,
-        'ip_count':       len(entry.get('ip_history') or []),
         'download_count': entry.get('download_count', 0),
         'last_download':  entry.get('last_download'),
         'connected':      st['connected'],
@@ -2193,7 +1986,6 @@ def user_status():
         'sess_down':      st['sess_down'],
         'sess_up':        st['sess_up'],
         'traffic_7d':     _traffic_7d(kid),
-        'log':            log,
         'recovery_token': recovery_token,
     })
     return _set_user_cookie(resp, kid)
@@ -2213,7 +2005,7 @@ def clash_profile(token):
         abort(404)
     if profile_entry is not None:
         profile_entry['last_profile_at'] = _now_iso()
-        _mark_key_seen(profile_entry, request.remote_addr)
+        _record_key_activity(profile_entry)
         _save(DATA)
     try:
         yaml = _clash_yaml(kid, _request_host())
@@ -2230,7 +2022,7 @@ def shadowrocket_profile(token):
         abort(404)
     if profile_entry is not None:
         profile_entry['last_profile_at'] = _now_iso()
-        _mark_key_seen(profile_entry, request.remote_addr)
+        _record_key_activity(profile_entry)
         _save(DATA)
     try:
         sub = _shadowrocket_subscription(kid, _request_host())
@@ -2247,7 +2039,7 @@ def shadowrocket_conf_profile(token):
         abort(404)
     if profile_entry is not None:
         profile_entry['last_profile_at'] = _now_iso()
-        _mark_key_seen(profile_entry, request.remote_addr)
+        _record_key_activity(profile_entry)
         _save(DATA)
     try:
         conf = _shadowrocket_conf(kid, _request_host())
@@ -2286,7 +2078,7 @@ def runner(platform):
     with open(priv_file) as f:
         private_key = f.read()
 
-    _record_key_ip(entry, request.remote_addr, activate=True)
+    _record_key_activity(entry, activate=True)
     entry['download_count'] = entry.get('download_count', 0) + 1
     entry['last_download']  = datetime.utcnow().isoformat()
     _save(DATA)
@@ -2718,4 +2510,4 @@ def index():
 
 if __name__ == '__main__':
     _auth_sync()
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, request_handler=PrivacyRequestHandler)

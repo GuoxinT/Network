@@ -5,7 +5,7 @@ CONFIG=/app/config.json
 STATE=/app/state
 USER_CONFIG="$STATE/users.json"
 SS_CONFIG_DIR="$STATE/ssserver.d"
-LOG_DIR="$STATE/logs"
+LOG_DIR="$STATE/traffic"
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"
@@ -63,17 +63,15 @@ pids=()
 start_server() {
   local config="$1"
   local log="$2"
-  while true; do
-    ssserver -vv -c "$config" 2>&1 \
-      | awk '/tcp tunnel .* closed|udp relay .* with [0-9]+ bytes/ { print; fflush(); }' >> "$log" || true
-    echo "$(date -u +%FT%TZ) ssserver exited for $config; restarting in 1s" >> "$log"
-    sleep 1
-  done
+  /app/scripts/run-user.sh "$config" "$log"
 }
 
 for f in "$SS_CONFIG_DIR"/*.json; do
-  echo "starting ssserver with $f"
   base="$(basename "$f" .json)"
+  if [[ "$base" == user-* ]]; then
+    suffix="${base#user-}"
+    base="user-${suffix%%-*}"
+  fi
   log="$LOG_DIR/$base.log"
   touch "$log"
   start_server "$f" "$log" &
