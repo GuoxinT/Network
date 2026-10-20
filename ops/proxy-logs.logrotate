@@ -1,0 +1,28 @@
+# Rotation for the proxy accounting logs that server.py tails for traffic
+# billing (see the "Traffic accounting framework" section in the root README).
+#
+# Runs as the unprivileged service user (user1) from that user's crontab, so it
+# carries its own state file and needs no root — see ops/README below.
+#
+# copytruncate is mandatory: the writers live inside Docker containers
+#   - ssserver, via the container's `... >> <log>` shell redirect (O_APPEND)
+#   - private_socks.py, via open(path, "a")            (O_APPEND)
+# and hold the file open for the container's lifetime. A rename-style rotation
+# would leave them writing to the old inode (new file stays empty). copytruncate
+# truncates in place; because both writers use O_APPEND, their next write lands
+# at the real end (offset 0), never creating a sparse hole. server.py's tailer
+# notices size < its saved offset and resumes reading from 0.
+#
+# The log *content* is disposable — server.py has already folded each line into
+# traffic.sqlite3 in real time — so retention is short and purely forensic.
+
+/home/user1/serverfetch/Plugins/shadowsocks-ios-mode/state/logs/*.log
+/home/user1/serverfetch/Plugins/private-mac-vpn/state/logs/*.log {
+    daily
+    maxsize 50M
+    rotate 3
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

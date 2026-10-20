@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import base64
 import select
 import socket
 import struct
@@ -10,10 +11,38 @@ import traceback
 
 STATE = os.environ.get("PRIVATE_SOCKS_STATE", "/app/state")
 USERS_FILE = os.path.join(STATE, "users.json")
+LOG_DIR = os.path.join(STATE, "logs")
 UPSTREAM_HOST = os.environ.get("PRIVATE_SOCKS_UPSTREAM_HOST", "127.0.0.1")
 UPSTREAM_PORT = int(os.environ.get("PRIVATE_SOCKS_UPSTREAM_PORT", "7890"))
+UPSTREAM_AUTH_PASSWORD = os.environ.get("PRIVATE_SOCKS_UPSTREAM_AUTH_PASSWORD", "schoolvpn-private-route")
 BUFFER = 65536
 UDP_ASSOC_TTL = 180
+
+# Per-connection byte accounting. The portal (server.py) tails one log file per
+# listening port and bills the bytes to the key that owns that port. We mirror
+# ssserver's close-line grammar so a single parser covers both proxies, and we
+# log on *every* close (clean or error), unlike ssserver, so no bytes are lost.
+_log_lock = threading.Lock()
+
+
+def log_conn(port, expected, client_addr, host, dport, up_bytes, down_bytes):
+    if up_bytes <= 0 and down_bytes <= 0:
+        return
+    key = (expected or {}).get("username") or "unknown"
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        path = os.path.join(LOG_DIR, "user-%s-%s.log" % (port, key))
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        cip = client_addr[0] if client_addr else "?"
+        cport = client_addr[1] if client_addr else 0
+        # L2R = client→remote = upload; R2L = download.
+        line = ("%s tcp tunnel %s:%s <-> %s:%s closed, "
+                "L2R %d bytes, R2L %d bytes\n"
+                % (ts, cip, cport, host, dport, int(up_bytes), int(down_bytes)))
+        with _log_lock, open(path, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
 
 
 class UdpAssoc:
@@ -106,6 +135,18 @@ def unpack_addr_from(data, offset):
     return host, port, offset
 
 
+def route_from_username(username, expected):
+    base = expected["username"]
+    if username == base:
+        return "private-default"
+    prefix = base + "__"
+    if username.startswith(prefix):
+        route = username[len(prefix):]
+        if route:
+            return route
+    return None
+
+
 def auth_client(sock, expected):
     head = recv_exact(sock, 2)
     if head[0] != 5:
@@ -122,17 +163,138 @@ def auth_client(sock, expected):
     username = recv_exact(sock, ulen).decode("utf-8", "ignore")
     plen = recv_exact(sock, 1)[0]
     password = recv_exact(sock, plen).decode("utf-8", "ignore")
-    ok = username == expected["username"] and password == expected["password"]
+    route_user = route_from_username(username, expected)
+    ok = bool(route_user) and password == expected["password"]
     sock.sendall(b"\x01\x00" if ok else b"\x01\x01")
     if not ok:
         raise OSError("auth failed")
+    return route_user
 
 
-def open_upstream_socks():
+def check_basic_auth(headers, expected):
+    raw = headers.get("proxy-authorization", "")
+    prefix = "basic "
+    if not raw.lower().startswith(prefix):
+        return False
+    try:
+        decoded = base64.b64decode(raw[len(prefix):].strip()).decode("utf-8", "ignore")
+    except Exception:
+        return False
+    username, sep, password = decoded.partition(":")
+    if not sep or password != expected["password"]:
+        return None
+    return route_from_username(username, expected)
+
+
+def recv_http_head(sock):
+    data = b""
+    while b"\r\n\r\n" not in data and len(data) < 65536:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise OSError("socket closed")
+        data += chunk
+    head, rest = data.split(b"\r\n\r\n", 1)
+    text = head.decode("iso-8859-1", "ignore")
+    lines = text.split("\r\n")
+    request_line = lines[0]
+    headers = {}
+    for line in lines[1:]:
+        name, sep, value = line.partition(":")
+        if sep:
+            headers[name.strip().lower()] = value.strip()
+    return request_line, headers, rest
+
+
+def http_error(sock, code, reason, headers=None):
+    extra = ""
+    for name, value in (headers or {}).items():
+        extra += "%s: %s\r\n" % (name, value)
+    body = ("%s %s\n" % (code, reason)).encode("utf-8")
+    sock.sendall(("HTTP/1.1 %s %s\r\n%sContent-Length: %d\r\nConnection: close\r\n\r\n"
+                  % (code, reason, extra, len(body))).encode("ascii") + body)
+
+
+def parse_host_port(authority, default_port):
+    authority = authority.strip()
+    if authority.startswith("["):
+        host, _, tail = authority[1:].partition("]")
+        port = default_port
+        if tail.startswith(":"):
+            port = int(tail[1:])
+        return host, port
+    if ":" in authority:
+        host, raw_port = authority.rsplit(":", 1)
+        return host, int(raw_port)
+    return authority, default_port
+
+
+def handle_http_proxy(client, expected, bind_port, client_addr):
+    request_line, headers, rest = recv_http_head(client)
+    route_user = check_basic_auth(headers, expected)
+    if not route_user:
+        http_error(client, 407, "Proxy Authentication Required",
+                   {"Proxy-Authenticate": "Basic realm=\"PrivateVPN\""})
+        raise OSError("http proxy auth failed")
+    parts = request_line.split()
+    if len(parts) != 3:
+        http_error(client, 400, "Bad Request")
+        raise OSError("bad http request line")
+    method, target, version = parts
+    method_upper = method.upper()
+    if method_upper == "CONNECT":
+        host, port = parse_host_port(target, 443)
+        up = connect_upstream(host, port, route_user)
+        client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        acct = [0, 0]
+        try:
+            relay(client, up, acct)
+        finally:
+            log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
+        return
+
+    # Plain HTTP proxy requests use absolute-form URLs. Convert to origin-form
+    # before forwarding after the upstream SOCKS connection is established.
+    if target.startswith("http://"):
+        without_scheme = target[7:]
+        authority, slash, path = without_scheme.partition("/")
+        host, port = parse_host_port(authority, 80)
+        origin = "/" + path if slash else "/"
+    else:
+        host_header = headers.get("host")
+        if not host_header:
+            http_error(client, 400, "Bad Request")
+            raise OSError("missing host header")
+        host, port = parse_host_port(host_header, 80)
+        origin = target
+    up = connect_upstream(host, port, route_user)
+    filtered = []
+    for name, value in headers.items():
+        if name in ("proxy-authorization", "proxy-connection"):
+            continue
+        filtered.append("%s: %s" % (name, value))
+    outbound = ("%s %s %s\r\n%s\r\n\r\n" %
+                (method, origin, version, "\r\n".join(filtered))).encode("iso-8859-1") + rest
+    acct = [len(outbound), 0]
+    up.sendall(outbound)
+    try:
+        relay(client, up, acct)
+    finally:
+        log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
+
+
+def open_upstream_socks(route_user=None):
     up = socket.create_connection((UPSTREAM_HOST, UPSTREAM_PORT), timeout=12)
-    up.sendall(b"\x05\x01\x00")
-    if recv_exact(up, 2) != b"\x05\x00":
+    route_user = route_user or "private-default"
+    up.sendall(b"\x05\x01\x02")
+    if recv_exact(up, 2) != b"\x05\x02":
         raise OSError("upstream socks handshake failed")
+    user_b = route_user.encode()
+    pass_b = UPSTREAM_AUTH_PASSWORD.encode()
+    if len(user_b) > 255 or len(pass_b) > 255:
+        raise OSError("upstream auth field too long")
+    up.sendall(b"\x01" + bytes([len(user_b)]) + user_b + bytes([len(pass_b)]) + pass_b)
+    if recv_exact(up, 2) != b"\x01\x00":
+        raise OSError("upstream socks auth failed")
     return up
 
 
@@ -147,14 +309,16 @@ def socks_request(up, cmd, host, port):
     return bind_host, bind_port
 
 
-def connect_upstream(host, port):
-    up = open_upstream_socks()
+def connect_upstream(host, port, route_user=None):
+    up = open_upstream_socks(route_user)
     socks_request(up, 1, host, port)
     return up
 
 
-def relay(a, b):
-    socks = [a, b]
+def relay(client, upstream, acct):
+    """Pump bytes both ways. acct is a mutable [up, down] counter so the caller
+    can log totals even when the connection ends by exception."""
+    socks = [client, upstream]
     try:
         while True:
             readable, _, _ = select.select(socks, [], [], 60)
@@ -164,7 +328,12 @@ def relay(a, b):
                 data = s.recv(BUFFER)
                 if not data:
                     return
-                (b if s is a else a).sendall(data)
+                if s is client:
+                    upstream.sendall(data)
+                    acct[0] += len(data)          # client→remote = upload
+                else:
+                    client.sendall(data)
+                    acct[1] += len(data)          # remote→client = download
     finally:
         for s in socks:
             try:
@@ -209,8 +378,8 @@ def udp_loop(sock, assocs, upstreams, lock):
             traceback.print_exc()
 
 
-def handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port):
-    up = open_upstream_socks()
+def handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port, route_user):
+    up = open_upstream_socks(route_user)
     bind_host, upstream_port = socks_request(up, 3, "0.0.0.0", 0)
     upstream_udp_addr = (bind_host, int(upstream_port))
     assoc = UdpAssoc(client_addr, up, upstream_udp_addr)
@@ -236,18 +405,26 @@ def handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock,
 
 def handle(client, expected, udp_sock, assocs, upstreams, lock, bind_port, client_addr):
     try:
-        auth_client(client, expected)
+        first = client.recv(1, socket.MSG_PEEK)
+        if first and first != b"\x05":
+            handle_http_proxy(client, expected, bind_port, client_addr)
+            return
+        route_user = auth_client(client, expected)
         req = recv_exact(client, 4)
         if req[0] != 5:
             raise OSError("bad socks version")
         host = read_addr(client, req[3])
         port = struct.unpack("!H", recv_exact(client, 2))[0]
         if req[1] == 1:
-            up = connect_upstream(host, port)
+            up = connect_upstream(host, port, route_user)
             client.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
-            relay(client, up)
+            acct = [0, 0]
+            try:
+                relay(client, up, acct)
+            finally:
+                log_conn(bind_port, expected, client_addr, host, port, acct[0], acct[1])
         elif req[1] == 3:
-            handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port)
+            handle_udp_associate(client, udp_sock, client_addr, assocs, upstreams, lock, bind_port, route_user)
         else:
             raise OSError("only CONNECT and UDP ASSOCIATE are supported")
     except Exception as exc:

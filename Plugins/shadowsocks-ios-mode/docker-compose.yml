@@ -5,6 +5,9 @@ services:
     container_name: Network
     user: "${PUID:-1002}:${PGID:-1002}"
     restart: unless-stopped
+    dns:
+      - 10.1.4.10
+      - 223.5.5.5
     ports:
       - "8388:8388/tcp"
       - "8388:8388/udp"

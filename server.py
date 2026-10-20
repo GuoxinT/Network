@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ServerFetch School VPN — server.py
+"""ServerFetch MyNetwork — server.py
 
 Runs on the lab machine. Generates a per-user SSH key, serves a tiny runner
 that opens an SSH SOCKS5 tunnel, and — because every tunnel terminates here —
@@ -43,6 +43,7 @@ SS_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'shadowsocks-ios-mode', 'state', 
 PRIVATE_VPN_CONFIG = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'config.json')
 PRIVATE_VPN_USERS = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'users.json')
 PRIVATE_VPN_CONFIG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'ssserver.d')
+PRIVATE_VPN_LOG_DIR = os.path.join(BASE_DIR, 'Plugins', 'private-mac-vpn', 'state', 'logs')
 TRAFFIC_DB  = os.path.join(BASE_DIR, 'traffic.sqlite3')
 SSH_USER    = os.environ.get('SSH_USER',    'user1')
 SERVER_HOST = os.environ.get('SERVER_HOST', '10.1.4.43')
@@ -52,6 +53,7 @@ AUTH_KEYS   = os.environ.get('AUTH_KEYS',   '')
 LOCK_TO_FIRST_IP = False
 KICK_SSH_ON_REVOKE = False
 COOKIE_NAME = 'labvpn_key'
+USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 400
 MOBILE_PROXY_CONTAINER = 'Network'
 PRIVATE_VPN_PROXY_CONTAINER = 'PrivateVPNProxy'
 VALID_DEVICES = ('iphone', 'android', 'mac', 'windows')
@@ -59,6 +61,19 @@ SS_USER_PORT_START = 8400
 SS_USER_PORT_END = 8599
 PRIVATE_VPN_PORT_START = 8600
 PRIVATE_VPN_PORT_END = 8699
+PRIVATE_VPN_ROUTES = (
+    ('us01', 'MyNetwork US01'),
+    ('us02', 'MyNetwork US02'),
+    ('us03', 'MyNetwork US03'),
+    ('us04', 'MyNetwork US04'),
+    ('us05', 'MyNetwork US05'),
+    ('us06', 'MyNetwork US06'),
+    ('us07', 'MyNetwork US07'),
+    ('us08', 'MyNetwork US08'),
+    ('ashburn01', 'MyNetwork Ashburn01'),
+    ('ashburn02', 'MyNetwork Ashburn02'),
+    ('ashburn03', 'MyNetwork Ashburn03'),
+)
 # Local timezone offset (hours) used only for bucketing traffic into days/hours
 # so the dashboard's "today" matches the operator's wall clock. Default +8
 # (China). Stored timestamps elsewhere stay UTC; only bucket labels shift.
@@ -126,6 +141,29 @@ def _init():
     return data
 
 DATA = _init()
+
+def _ensure_dashboard_token(entry, rotate=False):
+    if rotate or not entry.get('dashboard_token'):
+        entry['dashboard_token'] = secrets.token_urlsafe(32)
+    return entry['dashboard_token']
+
+def _entry_for_recovery_token(token):
+    token = (token or '').strip()
+    if not token:
+        return None, None, None
+    for kid, entry in DATA.get('verify_keys', {}).items():
+        dashboard_token = entry.get('dashboard_token') or ''
+        if dashboard_token and secrets.compare_digest(dashboard_token, token):
+            return kid, entry, 'dashboard'
+        profile_token = entry.get('profile_token') or ''
+        if profile_token and secrets.compare_digest(profile_token, token):
+            return kid, entry, 'profile'
+    return None, None, None
+
+def _set_user_cookie(resp, kid):
+    resp.set_cookie(COOKIE_NAME, kid, max_age=USER_COOKIE_MAX_AGE,
+                    httponly=True, samesite='Lax')
+    return resp
 
 def _ok_root(key):
     return secrets.compare_digest(key or '', DATA['root_key'])
@@ -502,6 +540,8 @@ def _monitored_ports():
     for entry in DATA.get('verify_keys', {}).values():
         if entry.get('ss_port'):
             ports.add(str(entry['ss_port']))
+        if entry.get('private_vpn_port'):
+            ports.add(str(entry['private_vpn_port']))
     return tuple(sorted(ports))
 
 def _sync_ss_users(restart=False):
@@ -586,7 +626,7 @@ def _allocate_private_vpn_port():
     for port in range(PRIVATE_VPN_PORT_START, PRIVATE_VPN_PORT_END + 1):
         if port not in used:
             return port
-    raise RuntimeError('No free private VPN Shadowsocks ports available')
+    raise RuntimeError('No free MyNetwork ports available')
 
 def _sync_private_vpn_users(restart=False):
     cfg = _private_vpn_cfg()
@@ -725,7 +765,7 @@ def _shadowrocket_url(host=None, kid=None):
         cfg = json.load(f)
     entry = DATA.get('verify_keys', {}).get(kid) if kid else None
     if kid and entry and _private_vpn_enabled_for(kid, entry):
-        return _shadowrocket_profile_url(kid)
+        return _shadowrocket_import_link(kid)
     if entry:
         _ensure_ss_user(kid, entry, restart=True)
     server_host = host or cfg.get('server_host') or SERVER_HOST
@@ -733,7 +773,7 @@ def _shadowrocket_url(host=None, kid=None):
     password = (entry or {}).get('ss_password') or cfg['password']
     port = int((entry or {}).get('ss_port') or cfg['server_port'])
     userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip('=')
-    name = quote((entry or {}).get('label') or cfg.get('profile_name', 'SchoolVPN-iOS'), safe='')
+    name = quote((entry or {}).get('label') or cfg.get('profile_name', 'MyNetwork iOS'), safe='')
     return f"ss://{userinfo}@{server_host}:{port}#{name}"
 
 def _shadowrocket_profile_url(kid):
@@ -743,44 +783,151 @@ def _shadowrocket_profile_url(kid):
         token = secrets.token_urlsafe(24)
         entry['profile_token'] = token
     sub_url = request.url_root.rstrip('/') + '/api/profile/shadowrocket/' + quote(token)
-    return ('shadowrocket://add/sub?url=' + quote(sub_url, safe='')
-            + '&remark=' + quote('SchoolVPN-PrivateVPN', safe=''))
+    return 'shadowrocket://add/' + quote(sub_url, safe='')
+
+def _shadowrocket_import_link(kid):
+    # Deep link that imports the full Shadowrocket .conf (proxy-all-except-LAN +
+    # UDP relay, rules baked in) instead of a bare node. A bare node leaves
+    # routing to Shadowrocket's default ruleset, which sends China/Tencent
+    # traffic DIRECT — broken on a network that blocks direct egress (QQ dies,
+    # WeChat images crawl). Importing the config makes routing correct out of
+    # the box, so users no longer need to flip global routing to Proxy.
+    entry = DATA.get('verify_keys', {}).get(kid) or {}
+    token = entry.get('profile_token')
+    if not token:
+        token = secrets.token_urlsafe(24)
+        entry['profile_token'] = token
+        if entry:
+            _save(DATA)  # token is the only handle to the conf endpoint; persist it now
+    conf_url = request.url_root.rstrip('/') + '/api/profile/shadowrocket-conf/' + quote(token)
+    return 'shadowrocket://config/add/' + quote(conf_url, safe='')
 
 def _shadowrocket_subscription(kid, host=None):
     entry = DATA.get('verify_keys', {}).get(kid) or {}
     if not _private_vpn_enabled_for(kid, entry):
-        return _shadowrocket_url(host, kid) + '\n'
+        node = _shadowrocket_url(host, kid) + '\n'
+        return base64.b64encode(node.encode()).decode() + '\n'
     private_cfg = _private_vpn_cfg()
     _ensure_private_vpn_user(kid, entry, restart=True)
     server_host = host or private_cfg.get('server_host') or SERVER_HOST
     port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
     password = entry.get('private_vpn_password') or private_cfg.get('password') or ''
-    user = quote(kid, safe='')
     pwd_q = quote(password, safe='')
-    name = quote((entry.get('label') or 'SchoolVPN-PrivateVPN'), safe='')
-    return f"socks5://{user}:{pwd_q}@{server_host}:{port}#{name}\n"
+    nodes = []
+    for route_id, route_name in PRIVATE_VPN_ROUTES:
+        user = quote(f'{kid}__{route_id}', safe='')
+        nodes.append(f"socks5://{user}:{pwd_q}@{server_host}:{port}#{quote(route_name, safe='')}")
+
+    if not os.path.exists(SS_CONFIG):
+        raise RuntimeError('Shadowsocks iOS plugin is not configured')
+    with open(SS_CONFIG) as f:
+        cfg = json.load(f)
+    _ensure_ss_user(kid, entry, restart=True)
+    direct_host = host or cfg.get('server_host') or SERVER_HOST
+    direct_port = int(entry.get('ss_port') or cfg['server_port'])
+    direct_method = entry.get('ss_method') or cfg['method']
+    direct_password = entry.get('ss_password') or cfg['password']
+    direct_userinfo = base64.urlsafe_b64encode(
+        f"{direct_method}:{direct_password}".encode()).decode().rstrip('=')
+    nodes.append(f"ss://{direct_userinfo}@{direct_host}:{direct_port}#MyNetwork%20Direct")
+    return base64.b64encode(('\n'.join(nodes) + '\n').encode()).decode() + '\n'
+
+# LAN / private networks stay off the tunnel (SSH + campus intranet keep working).
+_SR_LAN_DIRECT = '''IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+IP-CIDR,169.254.0.0/16,DIRECT,no-resolve'''
 
 def _shadowrocket_conf(kid, host=None):
     entry = DATA.get('verify_keys', {}).get(kid) or {}
     if not _private_vpn_enabled_for(kid, entry):
-        return _shadowrocket_url(host, kid) + '\n'
-    private_cfg = _private_vpn_cfg()
-    _ensure_private_vpn_user(kid, entry, restart=True)
-    server_host = host or private_cfg.get('server_host') or SERVER_HOST
-    port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
-    password = entry.get('private_vpn_password') or private_cfg.get('password') or ''
-    return f'''# School VPN - Shadowrocket
-# Generated by School VPN. Re-import this URL after admin changes permissions.
+        # Full .conf for the standard Shadowsocks outlet. A bare ss:// node would
+        # fall back to Shadowrocket's default ruleset, which routes China/Tencent
+        # traffic DIRECT — broken on a network that blocks direct egress (QQ dies,
+        # WeChat images crawl, while proxied apps like Douyin are fine). So we
+        # proxy everything except LAN and relay UDP (QQ and others need it).
+        if not os.path.exists(SS_CONFIG):
+            raise RuntimeError('Shadowsocks iOS plugin is not configured')
+        with open(SS_CONFIG) as f:
+            cfg = json.load(f)
+        if entry:
+            _ensure_ss_user(kid, entry, restart=True)
+        server_host = host or cfg.get('server_host') or SERVER_HOST
+        method = entry.get('ss_method') or cfg['method']
+        password = entry.get('ss_password') or cfg['password']
+        port = int(entry.get('ss_port') or cfg['server_port'])
+        return f'''# MyNetwork - Shadowrocket
+# Generated by MyNetwork. Re-import this URL after admin changes permissions.
 
 [General]
 bypass-system = true
-dns-server = 223.5.5.5, 119.29.29.29
+# No local dns-server: the campus blocks direct egress (incl. DNS to public
+# resolvers), so domains must be resolved remotely by the proxy. Pinning an
+# external resolver here makes Shadowrocket query it directly and fail, breaking
+# every domain-based app (web/Douyin/Bilibili) while IP-based ones (QQ) survive.
 
 [Proxy]
-SchoolVPN-PrivateVPN = socks5, {server_host}, {port}, username={kid}, password={password}, udp-relay=true
+MyNetwork = ss, {server_host}, {port}, encrypt-method={method}, password={password}, udp-relay=true
 
 [Rule]
-FINAL,SchoolVPN-PrivateVPN
+{_SR_LAN_DIRECT}
+FINAL,MyNetwork
+'''
+    private_cfg = _private_vpn_cfg()
+    _ensure_private_vpn_user(kid, entry, restart=True)
+    if not os.path.exists(SS_CONFIG):
+        raise RuntimeError('Shadowsocks iOS plugin is not configured')
+    with open(SS_CONFIG) as f:
+        cfg = json.load(f)
+    _ensure_ss_user(kid, entry, restart=True)
+    server_host = host or private_cfg.get('server_host') or SERVER_HOST
+    port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
+    password = entry.get('private_vpn_password') or private_cfg.get('password') or ''
+    private_nodes = '\n'.join(
+        f'{route_name} = socks5, {server_host}, {port}, {kid}__{route_id}, {password}, udp-relay=true'
+        for route_id, route_name in PRIVATE_VPN_ROUTES
+    )
+    direct_name = 'MyNetwork Direct'
+    direct_host = host or cfg.get('server_host') or SERVER_HOST
+    direct_port = int(entry.get('ss_port') or cfg['server_port'])
+    direct_method = entry.get('ss_method') or cfg['method']
+    direct_password = entry.get('ss_password') or cfg['password']
+    group_nodes = ', '.join(route_name for _route_id, route_name in PRIVATE_VPN_ROUTES)
+    return f'''# MyNetwork - Shadowrocket
+# Generated by MyNetwork. Re-import this URL after admin changes permissions.
+
+[General]
+bypass-system = true
+# No local dns-server: the campus blocks direct egress (incl. DNS to public
+# resolvers), so domains must be resolved remotely by the proxy. Pinning an
+# external resolver here makes Shadowrocket query it directly and fail, breaking
+# every domain-based app (web/Douyin/Bilibili) while IP-based ones (QQ) survive.
+
+[Proxy]
+{private_nodes}
+{direct_name} = ss, {direct_host}, {direct_port}, encrypt-method={direct_method}, password={direct_password}, udp-relay=true
+
+[Proxy Group]
+MyNetwork = select, {group_nodes}, {direct_name}
+
+[Rule]
+{_SR_LAN_DIRECT}
+DOMAIN,gpu1.bucea.edu.cn,{direct_name}
+DOMAIN-SUFFIX,qq.com,{direct_name}
+DOMAIN-SUFFIX,weixin.qq.com,{direct_name}
+DOMAIN-SUFFIX,wechat.com,{direct_name}
+DOMAIN-SUFFIX,gtimg.com,{direct_name}
+DOMAIN-SUFFIX,qpic.cn,{direct_name}
+DOMAIN-SUFFIX,idqqimg.com,{direct_name}
+DOMAIN-SUFFIX,myqcloud.com,{direct_name}
+DOMAIN-SUFFIX,tencent.com,{direct_name}
+DOMAIN-SUFFIX,tencent-cloud.net,{direct_name}
+DOMAIN-SUFFIX,qqmusic.qq.com,{direct_name}
+DOMAIN-SUFFIX,music.qq.com,{direct_name}
+GEOIP,CN,{direct_name}
+FINAL,MyNetwork
 '''
 
 def _clash_profile_urls(kid):
@@ -791,7 +938,7 @@ def _clash_profile_urls(kid):
         entry['profile_token'] = token
     config_url = request.url_root.rstrip('/') + '/api/profile/clash/' + quote(token)
     device = _norm_device(entry.get('device'))
-    profile_name = 'SchoolVPN-Android' if device == 'android' else 'SchoolVPN-ClashVerge'
+    profile_name = 'MyNetwork Android' if device == 'android' else 'MyNetwork Clash'
     import_url = 'clash://install-config?url=' + quote(config_url, safe='') + '&name=' + quote(profile_name, safe='')
     return config_url, import_url
 
@@ -808,22 +955,24 @@ def _clash_yaml(kid, host=None):
         private_cfg = _private_vpn_cfg()
         _ensure_private_vpn_user(kid, entry, restart=True)
         _ensure_ss_user(kid, entry, restart=True)
-        name = 'SchoolVPN-PrivateVPN'
         proxy_host = host or private_cfg.get('server_host') or SERVER_HOST
         proxy_port = int(entry.get('private_vpn_port') or private_cfg.get('server_port') or PRIVATE_VPN_PORT_START)
         proxy_password = entry.get('private_vpn_password') or private_cfg.get('password') or cfg['password']
-        direct_name = 'SchoolVPN-Direct'
+        direct_name = 'MyNetwork Direct'
         direct_host = host or cfg.get('server_host') or SERVER_HOST
         direct_port = int(entry.get('ss_port') or cfg['server_port'])
         direct_method = entry.get('ss_method') or cfg['method']
         direct_password = entry.get('ss_password') or cfg['password']
-        proxy_block = f'''  - name: {name}
+        private_proxy_blocks = []
+        for route_id, route_name in PRIVATE_VPN_ROUTES:
+            private_proxy_blocks.append(f'''  - name: {route_name}
     type: socks5
     server: {proxy_host}
     port: {proxy_port}
-    username: "{kid}"
+    username: "{kid}__{route_id}"
     password: "{proxy_password}"
-    udp: true
+    udp: true''')
+        proxy_block = '\n'.join(private_proxy_blocks) + f'''
   - name: {direct_name}
     type: ss
     server: {direct_host}
@@ -831,11 +980,11 @@ def _clash_yaml(kid, host=None):
     cipher: {direct_method}
     password: "{direct_password}"
     udp: true'''
-        group_proxy_names = f'''      - {name}
-      - {direct_name}'''
+        group_proxy_names = '\n'.join(f'      - {route_name}' for _route_id, route_name in PRIVATE_VPN_ROUTES)
+        group_proxy_names += f'\n      - {direct_name}'
     else:
         _ensure_ss_user(kid, entry, restart=True)
-        name = 'SchoolVPN-Android' if device == 'android' else 'SchoolVPN-ClashVerge'
+        name = 'MyNetwork Android' if device == 'android' else 'MyNetwork Clash'
         proxy_host = host or cfg.get('server_host') or SERVER_HOST
         proxy_port = int(entry.get('ss_port') or cfg['server_port'])
         proxy_method = entry.get('ss_method') or cfg['method']
@@ -848,7 +997,34 @@ def _clash_yaml(kid, host=None):
     password: "{proxy_password}"
     udp: true'''
         group_proxy_names = f'''      - {name}'''
-    comment = 'Private VPN outlet for this key only.' if private_vpn else 'Standard School VPN outlet.'
+    comment = 'MyNetwork outlet for this key only.' if private_vpn else 'Standard MyNetwork outlet.'
+    if private_vpn:
+        rule_block = f'''  - DOMAIN,gpu1.bucea.edu.cn,{direct_name}
+  - DOMAIN-SUFFIX,qq.com,{direct_name}
+  - DOMAIN-SUFFIX,weixin.qq.com,{direct_name}
+  - DOMAIN-SUFFIX,wechat.com,{direct_name}
+  - DOMAIN-SUFFIX,gtimg.com,{direct_name}
+  - DOMAIN-SUFFIX,qpic.cn,{direct_name}
+  - DOMAIN-SUFFIX,idqqimg.com,{direct_name}
+  - DOMAIN-SUFFIX,myqcloud.com,{direct_name}
+  - DOMAIN-SUFFIX,tencent.com,{direct_name}
+  - DOMAIN-SUFFIX,tencent-cloud.net,{direct_name}
+  - DOMAIN-SUFFIX,qqmusic.qq.com,{direct_name}
+  - DOMAIN-SUFFIX,music.qq.com,{direct_name}
+  - GEOIP,CN,{direct_name}
+  - MATCH,PROXY'''
+    else:
+        rule_block = '  - MATCH,PROXY'
+    # Always keep LAN / private-network traffic (incl. the server's own IP, used
+    # for SSH and the admin portal) OFF the tunnel. Without this, TUN/auto-route
+    # swallows connections to 10.x/192.168.x/etc. and SSH to the server breaks.
+    rule_block = '''  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+''' + rule_block
     tun_block = ''
     if mode == 'desktop_clash' or device in ('mac', 'windows'):
         tun_block = '''
@@ -860,13 +1036,13 @@ tun:
   dns-hijack:
     - any:53
 '''
-    return f'''# School VPN - Clash Meta / Mihomo
-# Generated by School VPN. Revoking the user's key invalidates this subscription.
+    return f'''# MyNetwork - Clash Meta / Mihomo
+# Generated by MyNetwork. Revoking the user's key invalidates this subscription.
 # {comment}
 
 mixed-port: 7890
 allow-lan: false
-mode: global
+mode: rule
 log-level: info
 ipv6: false
 
@@ -889,7 +1065,7 @@ proxy-groups:
 {group_proxy_names}
 
 rules:
-  - MATCH,PROXY
+{rule_block}
 '''
 
 # ── SSH keypair helpers ──────────────────────────────────────────────────────
@@ -1034,35 +1210,56 @@ def _kick_ssh_sessions():
             pass
     return len(pids)
 
-# ── Throughput monitor ───────────────────────────────────────────────────────
+# ── Throughput monitor & traffic accounting ──────────────────────────────────
 #
-# Every SSH tunnel ends on this machine, so `ss -i` gives us the real per-socket
-# byte counters. We sample once a second, aggregate by client IP, and expose
-# live speed, cumulative session totals, and a connect/disconnect log. From the
-# server's point of view: bytes it *sends* to the client = the user's download;
-# bytes it *receives* = the user's upload.
+# Single source of truth: TCP socket byte counters. Every proxy port (each
+# user's Shadowsocks port, each user's MyNetwork port, the shared port, and
+# the legacy SSH port) terminates on this machine, so `ss -i` exposes the real
+# per-socket cumulative byte counters. We sample twice a second, diff each
+# socket against its previous reading, attribute the delta to a key by the
+# *listening port* it terminates on, and both (a) update live speed/session
+# stats and (b) accrue it for periodic persistence to SQLite.
+#
+# Why counters and not the ssserver connection log: the log only emits totals
+# when a connection *closes*, so it loses every connection that closes on error
+# (RST) and lags badly on long-lived connections, while a close burst divided by
+# the sampling interval produces absurd instantaneous speeds. Counters are
+# continuous, survive errors, and measure the bytes the access link actually
+# carried. From the server's point of view: bytes it *sends* to the client =
+# the user's download; bytes it *receives* = the user's upload.
 
 _mon_lock  = threading.Lock()
 _ip_stats  = {}   # ip -> live stats dict
 _ip_logs   = {}   # ip -> deque[{t, event}]
 _key_stats = {}   # key id -> live proxy stats dict
 _sock_prev = {}   # socket key -> (sent, recv) from the previous sample
-_ss_log_offsets = {}
-_proxy_rate_prev = {}
+_log_offsets = {} # log path -> byte offset already consumed
+_key_tick  = {}   # key id -> [down, up] bytes seen in the current sample window
 
+# bytes_acked counts only data the peer has acknowledged, so unlike bytes_sent
+# it excludes TCP retransmissions — the more honest figure for billing. We fall
+# back to bytes_sent only on kernels that don't report bytes_acked. These are
+# used for the SSH transport, whose sockets live in the host network namespace
+# and so are visible to `ss -i`.
 _RE_SENT  = re.compile(r'bytes_sent:(\d+)')
 _RE_ACKED = re.compile(r'bytes_acked:(\d+)')
 _RE_RECV  = re.compile(r'bytes_received:(\d+)')
+# Per-connection close lines emitted by ssserver (Shadowsocks) and by our
+# private SOCKS proxy. L2R = local→remote = the user's upload; R2L = the
+# download. Both proxies run inside containers, so their own logs — not host
+# socket counters — are the authoritative byte source for these transports.
+_RE_TCP_CLOSED = re.compile(
+    r'tcp tunnel (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+<->\s+.+?\s+closed,\s+L2R\s+(?P<up>\d+)\s+bytes,\s+R2L\s+(?P<down>\d+)\s+bytes'
+)
+_RE_UDP_RELAY = re.compile(
+    r'udp relay (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+(?P<dir>->|<-)\s+.+?\s+with\s+(?P<bytes>\d+)\s+bytes'
+)
+# Used only by the destination-audit feature (which reads `docker logs`), not by
+# traffic accounting.
 _RE_MOBILE_TARGET = re.compile(
     r'(?P<t>\d{4}-\d\d-\d\dT[^\s]+Z).*?\btunnel\s+'
     r'(?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+->\s+'
     r'(?P<target>\[[^\]]+\]|[^:\s]+):(?P<port>\d+)\s*(?P<msg>.*)$'
-)
-_RE_SS_TCP_CLOSED = re.compile(
-    r'tcp tunnel (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+<->\s+.+?\s+closed,\s+L2R\s+(?P<up>\d+)\s+bytes,\s+R2L\s+(?P<down>\d+)\s+bytes'
-)
-_RE_SS_UDP = re.compile(
-    r'udp relay (?P<client>\[[^\]]+\]|[^:\s]+):\d+\s+(?P<dir>->|<-)\s+.+?\s+with\s+(?P<bytes>\d+)\s+bytes'
 )
 _SUSPICIOUS_HINTS = (
     'porn', 'adult', 'casino', 'gamble', 'bet365', 'torrent', 'tracker',
@@ -1122,7 +1319,7 @@ def _best_key_for_ip(ip, modes):
 
 def _key_for_ss_port(port):
     """Map a monitored listening port back to the key that owns it. Each key has
-    a dedicated Shadowsocks port and (optionally) a dedicated private-VPN port;
+    a dedicated Shadowsocks port and (optionally) a dedicated MyNetwork port;
     both belong to the same user, so traffic on either counts to that key."""
     try:
         port = int(port)
@@ -1191,7 +1388,7 @@ def _admin_profile_links(kid, entry):
         if mode in ('android_clash', 'desktop_clash') or (mode == 'ssh_runner' and device in ('mac', 'windows')):
             out['config_url'], out['import_url'] = _clash_profile_urls(kid)
         elif mode == 'ios_shadowrocket':
-            out['shadowrocket_url'] = _shadowrocket_url(_request_host(), kid)
+            out['shadowrocket_url'] = _shadowrocket_import_link(kid)
     except Exception as e:
         out['error'] = str(e)
     return out
@@ -1339,7 +1536,7 @@ def _admin_diagnostics():
         'container_status': docker_line,
         'ss_config_exists': os.path.exists(SS_CONFIG),
         'tcp_udp_8388_exposed': '8388/tcp' in docker_line and '8388/udp' in docker_line,
-        'traffic_accounting': 'tcp_socket_bytes_by_user_port',
+        'traffic_accounting': 'proxy_logs_by_user_port + ssh_socket_bytes_by_ip',
         'per_user_ss_ports': len([e for e in DATA.get('verify_keys', {}).values() if e.get('ss_port')]),
         'profile_last_request_at': recent_profile,
         'pending_requests': len(pending),
@@ -1363,85 +1560,87 @@ def _log_event(ip, event):
     _ip_logs.setdefault(ip, deque(maxlen=50)).appendleft(
         {'t': datetime.utcnow().isoformat(), 'event': event})
 
-def _key_from_ss_log_path(path):
-    base = os.path.basename(path)
-    m = re.match(r'user-(\d+)-(.+)\.log$', base)
+def _key_for_log_file(name):
+    """Map a proxy log filename to the key it bills. ssserver and the private
+    proxy both name their per-port logs `user-<port>-<...>.log`; the shared
+    Shadowsocks port logs to `shared-<port>...log`. Attribution is purely by
+    listening port — the client/target inside each line is for audit only."""
+    m = re.match(r'(user|shared)-(\d+)', name)
     if not m:
-        return None, None
-    return _key_for_ss_port(m.group(1))
+        return None
+    if m.group(1) == 'shared':
+        return SHARED_TRAFFIC_KEY
+    kid, _entry = _key_for_ss_port(m.group(2))
+    return kid
 
-def _record_proxy_delta(kid, client_ip, down, up):
-    if not kid or (down <= 0 and up <= 0):
+def _process_proxy_logs():
+    """Tail every Shadowsocks and private-MyNetwork per-port log, summing the bytes of
+    connections that closed since the last pass. This is the authoritative byte
+    source for the containerized proxies (their sockets are invisible to the
+    host's `ss`). Feeds DB accrual, live session totals, and the rate window."""
+    agg = {}
+    for log_dir in (SS_LOG_DIR, PRIVATE_VPN_LOG_DIR):
+        if not os.path.isdir(log_dir):
+            continue
+        for name in os.listdir(log_dir):
+            if not name.endswith('.log'):
+                continue
+            kid = _key_for_log_file(name)
+            if not kid:
+                continue
+            path = os.path.join(log_dir, name)
+            try:
+                size = os.path.getsize(path)
+                pos = _log_offsets.get(path, 0)
+                if pos > size:                # rotated/truncated → re-read
+                    pos = 0
+                with open(path, 'r', errors='ignore') as f:
+                    f.seek(pos)
+                    for ln in f:
+                        m = _RE_TCP_CLOSED.search(ln)
+                        if m:
+                            slot = agg.setdefault(kid, [0, 0])
+                            slot[0] += int(m.group('down'))
+                            slot[1] += int(m.group('up'))
+                            continue
+                        m = _RE_UDP_RELAY.search(ln)
+                        if m:
+                            n = int(m.group('bytes'))
+                            slot = agg.setdefault(kid, [0, 0])
+                            if m.group('dir') == '->':
+                                slot[1] += n          # client→target = upload
+                            else:
+                                slot[0] += n          # download
+                    _log_offsets[path] = f.tell()
+            except Exception:
+                continue
+    if not agg:
         return
-    _add_traffic(kid, down, up)
-    now = time.time()
     now_iso = datetime.utcnow().isoformat()
     with _mon_lock:
-        prev = _proxy_rate_prev.get(kid)
-        dt = max(now - prev, SAMPLE_SEC) if prev else SAMPLE_SEC
-        _proxy_rate_prev[kid] = now
-        st = _ip_stats.setdefault(client_ip, _new_stat())
-        if not st.get('connected'):
-            st['connected'] = True
-            st['since'] = now_iso
-        st['sess_down'] += down
-        st['sess_up'] += up
-        st['down_bps'] = down / dt
-        st['up_bps'] = up / dt
-        ks = _key_stats.setdefault(kid, _new_stat())
-        if not ks.get('connected'):
-            ks['connected'] = True
-            ks['since'] = now_iso
-        ks['sess_down'] += down
-        ks['sess_up'] += up
-        ks['down_bps'] = down / dt
-        ks['up_bps'] = up / dt
-        ks['last_at'] = now_iso
-        ks['rate_at'] = now_iso
-        ks['last_ip'] = client_ip
-
-def _process_ss_logs():
-    if not os.path.isdir(SS_LOG_DIR):
-        return
-    for name in os.listdir(SS_LOG_DIR):
-        if not name.endswith('.log'):
-            continue
-        path = os.path.join(SS_LOG_DIR, name)
-        kid, _entry = _key_from_ss_log_path(path)
-        if not kid:
-            continue
-        try:
-            size = os.path.getsize(path)
-            pos = _ss_log_offsets.get(path, 0)
-            if pos > size:
-                pos = 0
-            with open(path, 'r', errors='ignore') as f:
-                f.seek(pos)
-                for ln in f:
-                    m = _RE_SS_TCP_CLOSED.search(ln)
-                    if m:
-                        client = m.group('client').strip('[]')
-                        _record_proxy_delta(kid, client, int(m.group('down')), int(m.group('up')))
-                        continue
-                    m = _RE_SS_UDP.search(ln)
-                    if m:
-                        client = m.group('client').strip('[]')
-                        n = int(m.group('bytes'))
-                        if m.group('dir') == '->':
-                            _record_proxy_delta(kid, client, 0, n)
-                        else:
-                            _record_proxy_delta(kid, client, n, 0)
-                _ss_log_offsets[path] = f.tell()
-        except Exception:
-            continue
+        for kid, (down, up) in agg.items():
+            if down <= 0 and up <= 0:
+                continue
+            _accrue_traffic(kid, down, up)
+            tick = _key_tick.setdefault(kid, [0, 0])
+            tick[0] += down
+            tick[1] += up
+            ks = _key_stats.setdefault(kid, _new_stat())
+            if not ks.get('connected'):
+                ks['connected'] = True
+                ks['since'] = now_iso
+            ks['sess_down'] += down
+            ks['sess_up'] += up
+            ks['last_at'] = now_iso
+            ks['rate_at'] = now_iso
 
 def _ss_sockets_for_ports(ports):
     """Established TCP sockets terminating on monitored ports.
 
     `ss -i` prints each socket as a header line (state / local / peer) followed
-    by an indented info line carrying the byte counters. Older iproute2 has no
-    -O (oneline) flag and reports bytes_acked rather than bytes_sent, so we pair
-    the two lines manually and fall back to bytes_acked for "sent"."""
+    by an indented info line carrying the byte counters. We pair the two lines
+    manually. For the "sent" figure we prefer bytes_acked (excludes
+    retransmissions) and fall back to bytes_sent on kernels that omit it."""
     if not _SS:
         return None
     ports = set(str(p) for p in ports if p)
@@ -1457,7 +1656,7 @@ def _ss_sockets_for_ports(ports):
             continue
         if ln[0].isspace():                       # info line for the pending socket
             if cur:
-                ms = _RE_SENT.search(ln) or _RE_ACKED.search(ln)
+                ms = _RE_ACKED.search(ln) or _RE_SENT.search(ln)
                 mr = _RE_RECV.search(ln)
                 out.append((cur[0], cur[1], cur[2],
                             int(ms.group(1)) if ms else 0,
@@ -1479,51 +1678,65 @@ def _ss_sockets_for_ports(ports):
 
 SAMPLE_SEC = 0.5   # how often we read socket counters (finer = snappier graph)
 
+FLUSH_EVERY = 10   # flush accrued bytes to SQLite every FLUSH_EVERY samples (~5s)
+
 def _monitor_loop():
     global _sock_prev
     prev_t = time.time()
+    flush_tick = 0
     while True:
         time.sleep(SAMPLE_SEC)
-        _process_ss_logs()
-        shared_ss_port = _shadowsocks_port()
+        # Shadowsocks + MyNetwork bytes come from the proxies' own logs (their
+        # sockets live inside containers, invisible to the host's `ss`). This
+        # accrues to the DB and fills _key_tick for the rate window below.
+        _process_proxy_logs()
+        # SSH bytes come from host-namespace socket counters, by client IP.
         socks = _ss_sockets_for_ports(_monitored_ports())
-        if socks is None:
-            continue
         now = time.time()
         dt  = now - prev_t
         prev_t = now
         if dt <= 0:
             dt = SAMPLE_SEC
         cur, delta, present = {}, {}, set()
-        for key, port, ip, sent, recv in socks:
+        for key, port, ip, sent, recv in (socks or []):
             cur[key] = (sent, recv)
             present.add((port, ip))
             prev = _sock_prev.get(key)
-            ds = max(0, sent - prev[0]) if prev else 0
-            dr = max(0, recv - prev[1]) if prev else 0
+            if prev:
+                # Counters are monotonic per socket, so a decrease means the
+                # 4-tuple was reused by a brand-new connection (or the daemon
+                # restarted) — count the new socket's bytes from zero rather
+                # than dropping them.
+                ds = sent - prev[0]
+                if ds < 0:
+                    ds = sent
+                dr = recv - prev[1]
+                if dr < 0:
+                    dr = recv
+            else:
+                # First time we see this socket: its counter already holds the
+                # bytes transferred before we started watching, so seed without
+                # counting them.
+                ds = dr = 0
             d = delta.setdefault((port, ip), [0, 0])
             d[0] += ds; d[1] += dr
-        _sock_prev = cur
+        if socks is not None:
+            _sock_prev = cur
 
+        now_iso = datetime.utcnow().isoformat()
         with _mon_lock:
-            for (port, peer_ip), vals in delta.items():
-                if str(port) in (str(SSH_PORT), str(shared_ss_port)):
-                    continue
-                key_id, _entry = _key_for_ss_port(port)
-                if not key_id:
-                    continue
-                ks = _key_stats.setdefault(key_id, _new_stat())
-                if not ks.get('connected'):
-                    ks['connected'] = True
-                    ks['since'] = datetime.utcnow().isoformat()
-                ks['down_bps'] = vals[0] / dt
-                ks['up_bps'] = vals[1] / dt
-                ks['sess_down'] += vals[0]
-                ks['sess_up'] += vals[1]
-                ks['last_at'] = datetime.utcnow().isoformat()
-                if vals[0] > 0 or vals[1] > 0:
-                    ks['rate_at'] = ks['last_at']
-                ks['last_ip'] = peer_ip
+            # Live speed for log-based keys (SS / MyNetwork): the bytes that
+            # landed in the logs during this sample window, divided by the real
+            # elapsed time. Bounded by wall-clock dt, so no close-burst spikes.
+            for kid in set(_key_stats) | set(_key_tick):
+                ks = _key_stats.setdefault(kid, _new_stat())
+                tick = _key_tick.get(kid)
+                if tick and (tick[0] or tick[1]):
+                    ks['down_bps'] = tick[0] / dt
+                    ks['up_bps'] = tick[1] / dt
+                else:
+                    ks['down_bps'] = ks['up_bps'] = 0
+            _key_tick.clear()
 
             present_ips = set(ip for _port, ip in present)
             for ip in set(_ip_stats) | present_ips:
@@ -1537,7 +1750,7 @@ def _monitor_loop():
                 if now_c:
                     if not was:                       # new session
                         st['sess_down'] = st['sess_up'] = 0
-                        st['since'] = datetime.utcnow().isoformat()
+                        st['since'] = now_iso
                         _log_event(ip, 'up')
                     # accurate per-second rate; session totals get the raw bytes
                     st['down_bps'] = d[0] / dt
@@ -1547,13 +1760,38 @@ def _monitor_loop():
                     if delta.get((SSH_PORT, ip)):
                         kid, _entry = _best_key_for_ip(ip, ('ssh_runner',))
                         if kid:
-                            _add_traffic(kid, delta[(SSH_PORT, ip)][0], delta[(SSH_PORT, ip)][1])
+                            _accrue_traffic(kid, delta[(SSH_PORT, ip)][0], delta[(SSH_PORT, ip)][1])
                 else:
                     if was:
                         _log_event(ip, 'down')
                     st['down_bps'] = st['up_bps'] = 0
                 st['connected'] = now_c
 
+        flush_tick += 1
+        if flush_tick >= FLUSH_EVERY:
+            flush_tick = 0
+            try:
+                _flush_pending_traffic()
+            except Exception:
+                pass
+
+def _init_log_offsets():
+    """Start tailing each proxy log from its current end. Without this, a server
+    restart would re-read the whole file from offset 0 and double-count every
+    connection already persisted to the DB."""
+    for log_dir in (SS_LOG_DIR, PRIVATE_VPN_LOG_DIR):
+        if not os.path.isdir(log_dir):
+            continue
+        for name in os.listdir(log_dir):
+            if not name.endswith('.log'):
+                continue
+            path = os.path.join(log_dir, name)
+            try:
+                _log_offsets[path] = os.path.getsize(path)
+            except OSError:
+                pass
+
+_init_log_offsets()
 threading.Thread(target=_monitor_loop, daemon=True).start()
 
 # ── Admin endpoints ──────────────────────────────────────────────────────────
@@ -1622,7 +1860,7 @@ def admin_approve_request(rid):
             req['key'] = kid
             _ensure_ss_user(kid, DATA['verify_keys'][kid], restart=True)
             if mode == 'ios_shadowrocket':
-                req['link'] = req.get('link') or _shadowrocket_url(_request_host(), kid)
+                req['link'] = req.get('link') or _shadowrocket_import_link(kid)
             else:
                 req['config_url'], req['link'] = _clash_profile_urls(kid)
             req['approved_at'] = datetime.utcnow().isoformat()
@@ -1688,7 +1926,7 @@ def admin_update_key(kid):
             mode = 'desktop_clash'
             changed = True
         if enabled and mode not in ('ios_shadowrocket', 'android_clash', 'desktop_clash'):
-            return jsonify({'ok': False, 'error': 'Private VPN can only be enabled for Shadowrocket or Clash/Mihomo users.'}), 400
+            return jsonify({'ok': False, 'error': 'MyNetwork can only be enabled for Shadowrocket or Clash/Mihomo users.'}), 400
         if enabled:
             if not entry.get('private_vpn'):
                 entry['private_vpn'] = True
@@ -1712,6 +1950,18 @@ def admin_update_key(kid):
         'private_vpn': bool(_private_vpn_enabled_for(kid, entry)),
         'private_vpn_port': entry.get('private_vpn_port'),
     })
+
+@app.route('/api/admin/keys/<kid>/recovery-link', methods=['POST'])
+def admin_recovery_link(kid):
+    if not _ok_root(request.headers.get('X-Root-Key', '')):
+        return jsonify({'ok': False}), 401
+    entry = DATA.get('verify_keys', {}).get(kid)
+    if not entry:
+        return jsonify({'ok': False, 'error': 'Key not found'}), 404
+    token = _ensure_dashboard_token(entry, rotate=True)
+    _save(DATA)
+    link = request.url_root.rstrip('/') + '/#recover=' + quote(token, safe='')
+    return jsonify({'ok': True, 'recovery_link': link})
 
 @app.route('/api/admin/keys/<kid>', methods=['DELETE'])
 def admin_revoke(kid):
@@ -1750,6 +2000,18 @@ def _verify_key_from_request():
             or request.cookies.get(COOKIE_NAME, '')
             or request.args.get('key', '')).strip().upper()
 
+@app.route('/api/session/recover', methods=['POST'])
+def recover_session():
+    token = (request.json or {}).get('token', '')
+    kid, entry, _source = _entry_for_recovery_token(token)
+    if not kid:
+        return jsonify({'ok': False, 'error': 'Recovery link is invalid or expired'}), 401
+    next_token = _ensure_dashboard_token(entry, rotate=True)
+    _record_key_ip(entry, request.remote_addr, activate=True)
+    _save(DATA)
+    resp = jsonify({'ok': True, 'recovery_token': next_token})
+    return _set_user_cookie(resp, kid)
+
 @app.route('/api/request-key', methods=['POST'])
 def request_key():
     body = request.json or {}
@@ -1776,6 +2038,9 @@ def request_key_status(rid):
     req = DATA.setdefault('requests', {}).get(rid)
     if not req:
         return jsonify({'ok': False, 'error': 'Request not found'}), 404
+    if (req.get('status') == 'approved' and req.get('key')
+            and req.get('key') not in DATA.get('verify_keys', {})):
+        return jsonify({'ok': False, 'status': 'revoked', 'error': 'Access was revoked'}), 410
     if (req.get('status') == 'approved'
             and req.get('kind') in ('ios_shadowrocket', 'android_clash', 'desktop_clash')
             and not req.get('key')):
@@ -1820,14 +2085,18 @@ def request_key_status(rid):
             req['config_url'], req['link'] = _clash_profile_urls(req['key'])
         elif req.get('kind') == 'ios_shadowrocket':
             req['link'] = _shadowrocket_url(_request_host(), req['key'])
+        entry = DATA['verify_keys'][req['key']]
+        had_dashboard_token = bool(entry.get('dashboard_token'))
+        out['recovery_token'] = _ensure_dashboard_token(entry)
+        if not had_dashboard_token:
+            _save(DATA)
     if req.get('status') == 'approved' and req.get('link'):
         out['link'] = req['link']
     if req.get('status') == 'approved' and req.get('config_url'):
         out['config_url'] = req['config_url']
     resp = jsonify(out)
     if req.get('status') == 'approved' and req.get('key'):
-        resp.set_cookie(COOKIE_NAME, req['key'], max_age=60 * 60 * 24 * 90,
-                        httponly=True, samesite='Lax')
+        _set_user_cookie(resp, req['key'])
     return resp
 
 @app.route('/api/logout', methods=['POST'])
@@ -1844,10 +2113,12 @@ def validate_key():
         return err
     if _record_key_ip(entry, request.remote_addr):
         _save(DATA)
-    resp = jsonify({'ok': True})
-    resp.set_cookie(COOKIE_NAME, kid, max_age=60 * 60 * 24 * 90,
-                    httponly=True, samesite='Lax')
-    return resp
+    had_dashboard_token = bool(entry.get('dashboard_token'))
+    recovery_token = _ensure_dashboard_token(entry)
+    if not had_dashboard_token:
+        _save(DATA)
+    resp = jsonify({'ok': True, 'recovery_token': recovery_token})
+    return _set_user_cookie(resp, kid)
 
 @app.route('/api/user/status')
 def user_status():
@@ -1857,7 +2128,10 @@ def user_status():
     entry, err = _entry_for(kid, request.remote_addr)
     if err:
         return err
-    if _record_key_ip(entry, request.remote_addr):
+    changed = _record_key_ip(entry, request.remote_addr)
+    had_dashboard_token = bool(entry.get('dashboard_token'))
+    recovery_token = _ensure_dashboard_token(entry)
+    if changed or not had_dashboard_token:
         _save(DATA)
     ip = request.remote_addr
     with _mon_lock:
@@ -1893,10 +2167,10 @@ def user_status():
             _save(DATA)
     elif mode == 'ios_shadowrocket':
         try:
-            shadowrocket_url = _shadowrocket_url(_request_host(), kid)
+            shadowrocket_url = _shadowrocket_import_link(kid)
         except Exception:
             shadowrocket_url = None
-    return jsonify({
+    resp = jsonify({
         'ok':             True,
         'label':          entry.get('label', ''),
         'mode':           mode,
@@ -1920,7 +2194,9 @@ def user_status():
         'sess_up':        st['sess_up'],
         'traffic_7d':     _traffic_7d(kid),
         'log':            log,
+        'recovery_token': recovery_token,
     })
+    return _set_user_cookie(resp, kid)
 
 @app.route('/api/profile/clash/<token>')
 def clash_profile(token):
@@ -2032,11 +2308,11 @@ def _attach(script, kid, ext):
 def _mac_runner(kid, private_key, connect_host):
     script = f'''#!/bin/bash
 # ─────────────────────────────────────────────────────────────
-#  School VPN Runner — macOS
+#  MyNetwork Runner — macOS
 #  Key  : {kid}
 #  Host : {SSH_USER}@{connect_host}
 #
-#  Usage: chmod +x schoolvpn.sh && ./schoolvpn.sh
+#  Usage: chmod +x mynetwork.sh && ./mynetwork.sh
 #  Press Ctrl+C to disconnect.
 # ─────────────────────────────────────────────────────────────
 SERVER_USER="{SSH_USER}"
@@ -2106,7 +2382,7 @@ cleanup() {{
   sleep 1
   [ -n "$SSH_PID" ] && kill -9 "$SSH_PID" 2>/dev/null
   rm -f "$KEY_FILE"
-  echo "Done — VPN stopped and your previous network settings are restored."
+  echo "Done — MyNetwork stopped and your previous network settings are restored."
 }}
 # EXIT covers normal end / Ctrl-C; HUP covers closing the Terminal window.
 trap cleanup EXIT HUP INT TERM
@@ -2213,13 +2489,13 @@ def _win_runner(kid, private_key, connect_host):
     key_b64 = base64.b64encode(private_key.encode()).decode()
     script = f'''@echo off
 :: -------------------------------------------------------------
-::  School VPN Runner - Windows
+::  MyNetwork Runner - Windows
 ::  Key  : {kid}
 ::  Host : {SSH_USER}@{connect_host}
 ::
 ::  Double-click to connect. Press any key to disconnect.
 :: -------------------------------------------------------------
-title School VPN - Connecting...
+title MyNetwork - Connecting...
 setlocal enabledelayedexpansion
 
 set "SERVER_USER={SSH_USER}"
@@ -2282,7 +2558,7 @@ for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /R /C:"IPv4.*192\\.168\\
 
 echo Connecting...
 if defined SHARE_HOST (
-  start "SchoolVPN-SSH" /b ssh -N -D 127.0.0.1:%SOCKS_PORT% -D !SHARE_HOST!:%SOCKS_PORT% ^
+  start "MyNetwork-SSH" /b ssh -N -D 127.0.0.1:%SOCKS_PORT% -D !SHARE_HOST!:%SOCKS_PORT% ^
   -p %SERVER_PORT% ^
   -o StrictHostKeyChecking=no ^
   -o ConnectTimeout=10 ^
@@ -2299,7 +2575,7 @@ if defined SHARE_HOST (
   -i "%KEY_FILE%" ^
   %SERVER_USER%@%SERVER_HOST%
 ) else (
-  start "SchoolVPN-SSH" /b ssh -N -D 127.0.0.1:%SOCKS_PORT% ^
+  start "MyNetwork-SSH" /b ssh -N -D 127.0.0.1:%SOCKS_PORT% ^
   -p %SERVER_PORT% ^
   -o StrictHostKeyChecking=no ^
   -o ConnectTimeout=10 ^
@@ -2339,7 +2615,7 @@ reg add "%REGK%" /v ProxyEnable /t REG_DWORD /d 1 /f >nul
 reg add "%REGK%" /v ProxyServer /t REG_SZ /d "socks=127.0.0.1:%SOCKS_PORT%" /f >nul
 reg add "%REGK%" /v ProxyOverride /t REG_SZ /d "localhost;127.*;10.*;192.168.*" /f >nul
 
-title School VPN - Connected
+title MyNetwork - Connected
 echo.
 echo   ============================================
 echo    CONNECTED - your browser now uses the lab
@@ -2377,7 +2653,7 @@ if errorlevel 1 echo WARNING: tunnel is up but internet check failed.
 goto CONNECTED_LOOP
 
 :DISCONNECT
-title School VPN - Disconnecting...
+title MyNetwork - Disconnecting...
 taskkill /f /im ssh.exe >nul 2>&1
 :: restore your previous proxy exactly
 if "%ORIG_ENABLE%"=="0x1" (
@@ -2393,7 +2669,7 @@ timeout /t 2 /nobreak >nul
     return _attach(script, kid, 'bat')
 
 def _ios_shadowrocket_kit(kid, private_key, connect_host):
-    text = f'''School VPN - Shadowrocket setup for iOS
+    text = f'''MyNetwork - Shadowrocket setup for iOS
 
 Key
   {kid}
@@ -2422,7 +2698,7 @@ Notes
     traffic such as iCloud, App Store, push services, or app refresh.
   - For lower traffic, avoid Global/Proxy-All mode. Prefer Rule/Config mode and
     let Apple, iCloud, App Store, LAN, and China traffic go Direct.
-  - After setup, close the School VPN dashboard page and pause large iCloud Photos
+  - After setup, close the MyNetwork dashboard page and pause large iCloud Photos
     or App Store downloads if the tunnel feels busy.
 
 Private key

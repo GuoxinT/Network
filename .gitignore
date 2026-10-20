@@ -11,7 +11,19 @@ gateway/config.json
 
 # ── Runtime / generated data ─────────────────────────────────────────────
 *.sqlite3
+*.sqlite3-*
 *.log
+*.log.*
+*.bak
+*.bak-*
+*.bak.*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.priv
+ops/logrotate.state
 server.log
 # Container runtime state (generated ssserver.json, etc.)
 Plugins/shadowsocks-ios-mode/state/

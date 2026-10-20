@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>School VPN</title>
+<title>MyNetwork</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
@@ -339,8 +339,8 @@ select {
     <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
   </div>
   <div>
-    <div class="logo-text">School VPN</div>
-    <div class="logo-sub" id="hdr-sub">School VPN</div>
+    <div class="logo-text">MyNetwork</div>
+    <div class="logo-sub" id="hdr-sub">MyNetwork</div>
   </div>
   <div class="header-right" id="hdr-right"></div>
 </header>
@@ -351,7 +351,7 @@ select {
     <div class="user-icon">
       <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
     </div>
-    <div class="user-title">School VPN</div>
+    <div class="user-title">MyNetwork</div>
     <div class="user-sub">Request access once. After admin approval this browser signs in automatically.</div>
 
     <div class="key-msg" id="key-msg"></div>
@@ -388,7 +388,7 @@ select {
         <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:16px;font-weight:700" id="dash-label">School VPN</div>
+        <div style="font-size:16px;font-weight:700" id="dash-label">MyNetwork</div>
         <div style="font-size:12px;color:var(--muted);margin-top:2px" id="dash-device"></div>
       </div>
       <div id="dash-conn-pill"></div>
@@ -466,7 +466,7 @@ select {
           <span class="term-dot" style="background:#ff5f57"></span>
           <span class="term-dot" style="background:#febc2e"></span>
           <span class="term-dot" style="background:#28c840"></span>
-          <span class="term-title">schoolvpn — tunnel events</span>
+          <span class="term-title">mynetwork — tunnel events</span>
           <span class="term-live"><span class="pulse-dot" style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span> live</span>
         </div>
         <div class="term-body" id="conn-log"><div class="log-empty">Waiting for tunnel activity…</div></div>
@@ -594,13 +594,14 @@ select {
 
 <script>
 const API = '';
-const DISPLAY_HOST = 'School VPN';
+const DISPLAY_HOST = 'MyNetwork';
 let rootKey     = '';
 let verifiedKey = '';
 let requestTimer = null;
 let pendingIosLink = '';
 let pendingAndroidConfig = '';
 let pendingAndroidImport = '';
+const RECOVERY_STORAGE_KEY = 'labvpn_dashboard_token';
 let currentDevice = '';
 let currentMode = '';
 let adminUserCache = [];
@@ -641,6 +642,61 @@ function fetchT(url, opts, ms) {
       function(e){ clearTimeout(t); rej(e); }
     );
   });
+}
+function rememberRecoveryToken(token) {
+  if (!token) return;
+  try { localStorage.setItem(RECOVERY_STORAGE_KEY, token); } catch(e) {}
+}
+function profileTokenFromSavedLinks() {
+  var values = [];
+  try {
+    values.push(localStorage.getItem('labvpn_ios_link') || '');
+    values.push(localStorage.getItem('labvpn_android_config') || '');
+    values.push(localStorage.getItem('labvpn_android_import') || '');
+  } catch(e) {}
+  for (var i = 0; i < values.length; i++) {
+    var text = values[i];
+    for (var n = 0; n < 3; n++) {
+      try {
+        var decoded = decodeURIComponent(text);
+        if (decoded === text) break;
+        text = decoded;
+      } catch(e) { break; }
+    }
+    var match = text.match(/\/api\/profile\/(?:clash|shadowrocket(?:-conf)?)\/([A-Za-z0-9_-]+)/i);
+    if (match) return match[1];
+  }
+  return '';
+}
+async function recoverWithToken(token) {
+  if (!token) return false;
+  try {
+    var r = await fetchT(API + '/api/session/recover', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token}),
+    }, 8000);
+    var d = await r.json();
+    if (!d.ok) return false;
+    rememberRecoveryToken(d.recovery_token);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+async function recoverStoredSession(extraToken) {
+  var candidates = [];
+  if (extraToken) candidates.push(extraToken);
+  try { candidates.push(localStorage.getItem(RECOVERY_STORAGE_KEY) || ''); } catch(e) {}
+  candidates.push(profileTokenFromSavedLinks());
+  var seen = {};
+  for (var i = 0; i < candidates.length; i++) {
+    var token = candidates[i];
+    if (!token || seen[token]) continue;
+    seen[token] = true;
+    if (await recoverWithToken(token)) return true;
+  }
+  return false;
 }
 function copyText(text, btn) {
   function flash() {
@@ -1153,6 +1209,7 @@ async function pollStatus() {
     if (!d.ok) {
       // key was revoked or is locked to another machine — return to login
       if (r.status === 401 || r.status === 403) {
+        if (await recoverStoredSession()) return;
         goUserFromDash();
         document.getElementById('key-msg').innerHTML =
           '<span style="color:var(--red)">&#10007; ' + esc(d.error || 'Key no longer valid') + '</span>';
@@ -1164,6 +1221,7 @@ async function pollStatus() {
 }
 
 function renderStatus(d) {
+  rememberRecoveryToken(d.recovery_token);
   var oldDevice = currentDevice;
   var oldMode = currentMode;
   currentDevice = d.device || currentDevice || '';
@@ -1174,7 +1232,7 @@ function renderStatus(d) {
   showIosLinkNotice(d.shadowrocket_url || d.link);
   showAndroidLinkNotice(d.config_url, d.link);
   // identity
-  document.getElementById('dash-label').textContent  = d.label || 'School VPN Access';
+  document.getElementById('dash-label').textContent  = d.label || 'MyNetwork Access';
   document.getElementById('dash-device').textContent =
     (currentDevice ? currentDevice.toUpperCase() : 'DEVICE') + ' · key hidden';
 
@@ -1272,15 +1330,15 @@ function renderDownload() {
     body.innerHTML = '<div class="info-box ok">Your iPhone profile is approved. Use the Shadowrocket button below; no verify-key is shown on this page.</div>';
     guide.innerHTML =
       guideRow('1. Open', 'Tap Open in Shadowrocket below') +
-      guideRow('2. Select', 'Choose the SchoolVPN-iOS node in Shadowrocket') +
-      guideRow('3. Route', 'Use Proxy / Global Proxy first while testing') +
+      guideRow('2. Import', 'It imports the MyNetwork config (routing rules are built in)') +
+      guideRow('3. Connect', 'Just toggle the switch on — no need to change Global Routing') +
       guideRow('4. Watch', 'The seven-day usage chart updates from server-side traffic data');
   } else if (device === 'android' || currentMode === 'android_clash') {
     body.innerHTML = '<div class="info-box ok">Your Android Clash Meta profile is approved. Import the subscription below; no verify-key is shown on this page.</div>';
     guide.innerHTML =
       guideRow('1. Install', 'Open Clash Meta / Mihomo on Android') +
       guideRow('2. Import', 'Use the install button or copy the subscription URL below') +
-      guideRow('3. Select', 'Choose the SchoolVPN-Android profile and proxy node') +
+      guideRow('3. Select', 'Choose the MyNetwork Android profile and proxy node') +
       guideRow('4. Route', 'Use Global mode first while testing, then adjust rules if needed');
   } else if (device === 'windows') {
     body.innerHTML =
@@ -1292,7 +1350,7 @@ function renderDownload() {
     guide.innerHTML =
       guideRow('1. Install', 'Open Clash Verge on Windows') +
       guideRow('2. Import', 'Copy the subscription URL below into Profiles / Subscriptions') +
-      guideRow('3. Select', 'Choose the SchoolVPN-ClashVerge profile and node') +
+      guideRow('3. Select', 'Choose the MyNetwork Clash profile and node') +
       guideRow('4. Route', 'Use Global mode first while testing') +
       guideRow('Fallback', 'The SSH runner remains available if Clash Verge cannot be used');
   } else if (device === 'mac') {
@@ -1305,7 +1363,7 @@ function renderDownload() {
     guide.innerHTML =
       guideRow('1. Install', 'Open Clash Verge on macOS') +
       guideRow('2. Import', 'Copy the subscription URL below into Profiles / Subscriptions') +
-      guideRow('3. Select', 'Choose the SchoolVPN-ClashVerge profile and node') +
+      guideRow('3. Select', 'Choose the MyNetwork Clash profile and node') +
       guideRow('4. Route', 'Use Global mode first while testing') +
       guideRow('Fallback', 'The SSH runner remains available if Clash Verge cannot be used');
   } else {
@@ -1313,8 +1371,8 @@ function renderDownload() {
       dlRow("downloadRunner('mac')", SH_ICO, 'macOS Runner (.sh)', 'Built-in ssh — no Python', 'macOS') +
       dlRow("downloadRunner('win')", WIN_ICO, 'Windows Runner (.bat)', 'Built-in ssh.exe — no Python', 'Windows');
     guide.innerHTML =
-      guideRow('macOS', codeTag('chmod +x schoolvpn.sh &amp;&amp; ./schoolvpn.sh')) +
-      guideRow('Windows', 'Double-click ' + codeTag('schoolvpn.bat')) +
+      guideRow('macOS', codeTag('chmod +x mynetwork.sh &amp;&amp; ./mynetwork.sh')) +
+      guideRow('Windows', 'Double-click ' + codeTag('mynetwork.bat')) +
       guideRow('Phone hotspot', 'Use the Host/Port printed by the desktop runner as phone SOCKS proxy');
   }
 }
@@ -1334,15 +1392,17 @@ function showIosLinkNotice(link) {
   try {
     if (/^shadowrocket:\/\/add\/sub/i.test(pendingIosLink)) {
       subUrl = new URL(pendingIosLink).searchParams.get('url') || '';
+    } else if (/^shadowrocket:\/\/(?:config\/)?add\//i.test(pendingIosLink)) {
+      subUrl = decodeURIComponent(pendingIosLink.replace(/^shadowrocket:\/\/(?:config\/)?add\//i, ''));
     }
   } catch(e) {}
-  var isPrivate = /^shadowrocket:\/\/add\/sub/i.test(pendingIosLink) || /\/api\/profile\/shadowrocket\//i.test(pendingIosLink) || /^socks5:\/\//i.test(pendingIosLink);
-  var title = isPrivate ? 'iOS Shadowrocket Private VPN link is ready.' : 'iOS Shadowrocket link is ready.';
+  var isPrivate = /^shadowrocket:\/\/(?:config\/)?add\//i.test(pendingIosLink) || /^shadowrocket:\/\/add\/sub/i.test(pendingIosLink) || /\/api\/profile\/shadowrocket/i.test(pendingIosLink) || /^socks5:\/\//i.test(pendingIosLink);
+  var title = isPrivate ? 'iOS Shadowrocket MyNetwork link is ready.' : 'iOS Shadowrocket link is ready.';
   var routeText = isPrivate
-    ? 'Open this in Shadowrocket and select <strong>SchoolVPN-PrivateVPN</strong>. If iOS opens a browser instead, copy the subscription URL and import it in Shadowrocket from URL / Subscribe.'
-    : 'After importing, select the <strong>SchoolVPN-iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.';
+    ? 'Open this in Shadowrocket and select <strong>MyNetwork</strong>, then choose an authorized node. If iOS opens a browser instead, copy the profile URL and import it from Shadowrocket Configurations.'
+    : 'After importing, select the <strong>MyNetwork iOS</strong> node and set Shadowrocket routing to <strong>Proxy / Global Proxy</strong>. If the dashboard traffic curve stays flat while browsing bilibili, the phone is still using Direct/Rule routing instead of the server. If DNS is configurable, use System DNS or 223.5.5.5 / 119.29.29.29 instead of Google DNS.';
   var openButton = '<a class="btn btn-accent btn-sm" href="' + esc(pendingIosLink) + '">Open in Shadowrocket</a>';
-  var subButton = subUrl ? ' <button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(subUrl) + '&quot;,this)">Copy subscription URL</button>' : '';
+  var subButton = subUrl ? ' <button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(subUrl) + '&quot;,this)">Copy profile URL</button>' : '';
   msg.innerHTML =
     '<div class="info-box ok">' + title + ' ' +
     '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(pendingIosLink) + '&quot;,this)">Copy link</button> ' +
@@ -1364,7 +1424,7 @@ function showAndroidLinkNotice(configUrl, importUrl) {
   if (!msg) return;
   var isDesktopClash = currentMode === 'desktop_clash' || currentDevice === 'mac' || currentDevice === 'windows';
   var appName = isDesktopClash ? 'Clash Verge' : 'Android Clash Meta';
-  var profileName = isDesktopClash ? 'SchoolVPN-ClashVerge' : 'SchoolVPN-Android';
+  var profileName = isDesktopClash ? 'MyNetwork Clash' : 'MyNetwork Android';
   var openBtn = pendingAndroidImport
     ? '<a class="btn btn-accent btn-sm" href="' + esc(pendingAndroidImport) + '">Open in ' + appName + '</a> '
     : '';
@@ -1422,11 +1482,18 @@ async function pollKeyRequest(rid) {
   try {
     var r = await fetchT(API + '/api/request-key/' + encodeURIComponent(rid), {}, 6000);
     var d = await r.json();
-    if (!d.ok) return;
+    if (!d.ok) {
+      if (d.status === 'revoked') {
+        stopRequestPoll();
+        try { localStorage.removeItem('labvpn_request_id'); } catch(e) {}
+        msg.innerHTML = '<span style="color:var(--red)">Access was revoked. Contact your administrator if access is still required.</span>';
+      }
+      return;
+    }
     if (d.status === 'approved' && (d.approved || d.key)) {
       stopRequestPoll();
       try {
-        localStorage.removeItem('labvpn_request_id');
+        rememberRecoveryToken(d.recovery_token);
         if (d.link) localStorage.setItem('labvpn_ios_link', d.link);
         if (d.config_url) localStorage.setItem('labvpn_android_config', d.config_url);
         if (d.config_url && d.link) localStorage.setItem('labvpn_android_import', d.link);
@@ -1443,7 +1510,7 @@ async function pollKeyRequest(rid) {
       else if (d.link) showIosLinkNotice(d.link);
     } else if (d.status === 'approved' && d.link) {
       stopRequestPoll();
-      try { localStorage.removeItem('labvpn_request_id'); } catch(e) {}
+      rememberRecoveryToken(d.recovery_token);
       msg.innerHTML =
         '<span style="color:var(--green)">Approved.</span> ' +
         '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(d.link) + '&quot;,this)">Copy link</button> ' +
@@ -1474,7 +1541,7 @@ async function downloadRunner(platform) {
     var ext  = platform === 'mac' ? '.sh' : '.bat';
     var a    = document.createElement('a');
     a.href     = URL.createObjectURL(blob);
-    a.download = 'schoolvpn' + ext;
+    a.download = 'mynetwork' + ext;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1736,7 +1803,7 @@ function renderPrivateVpnPanel() {
   panel.innerHTML =
     '<div class="private-panel">' +
       '<div class="chart-toolbar">' +
-        '<div><div class="card-label" style="margin-bottom:3px">Private VPN Access</div>' +
+        '<div><div class="card-label" style="margin-bottom:3px">MyNetwork Access</div>' +
         '<div style="font-size:12px;color:var(--muted)">Manually choose which Shadowrocket / Clash users can use the private outlet.</div></div>' +
         '<button class="btn btn-ghost btn-sm" onclick="setAdminFilter(&quot;private&quot;)">Show enabled</button>' +
       '</div>' +
@@ -1752,7 +1819,7 @@ function renderPrivateVpnPanel() {
           '<div>' + status + '</div>' +
           '<div style="color:' + (enabled ? 'var(--teal)' : 'var(--muted)') + '">' + port + '</div>' +
           '<button class="btn ' + (enabled ? 'btn-ghost' : 'btn-accent') + ' btn-sm" onclick="togglePrivateVpn(&quot;' + esc(u.key) + '&quot;,' + (!enabled) + ',this)">' +
-            (enabled ? 'Disable Private VPN' : 'Enable Private VPN') + '</button>' +
+            (enabled ? 'Disable MyNetwork' : 'Enable MyNetwork') + '</button>' +
         '</div>';
       }).join('') +
     '</div>';
@@ -1764,7 +1831,7 @@ function renderUsers() {
   renderPrivateVpnPanel();
   var options = [
     ['all', 'All'], ['active', 'Active'], ['unused', 'Unused'],
-    ['clash', 'Clash'], ['private', 'Private VPN'], ['ssh', 'SSH'], ['iphone', 'iPhone'],
+    ['clash', 'Clash'], ['private', 'MyNetwork'], ['ssh', 'SSH'], ['iphone', 'iPhone'],
     ['android', 'Android'], ['mac', 'mac'], ['windows', 'windows']
   ];
   filters.innerHTML = options.map(function(o) {
@@ -1780,7 +1847,7 @@ function renderUsers() {
     '<div class="table-scroll"><table class="keys-table"><thead><tr>' +
       userHead('label', 'User') + userHead('device', 'Device') + userHead('mode', 'Mode') +
       userHead('total', '7d Traffic') + userHead('last_seen_at', 'Last Active') +
-      '<th>IP Audit</th><th>Private VPN</th><th>Subscription</th><th></th>' +
+      '<th>IP Audit</th><th>MyNetwork</th><th>Subscription</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map(function(u) {
       var sub = subscriptionForUser(u);
@@ -1790,7 +1857,7 @@ function renderUsers() {
       var subCell = sub
         ? '<button class="btn btn-ghost btn-sm" onclick="copyText(&quot;' + esc(sub) + '&quot;,this)">Copy URL</button>' +
           (u.private_vpn
-            ? '<br><span style="font-size:11px;color:var(--teal)">private VPN port ' + esc(u.private_vpn_port || '—') + '</span>'
+            ? '<br><span style="font-size:11px;color:var(--teal)">MyNetwork port ' + esc(u.private_vpn_port || '—') + '</span>'
             : (u.ss_port ? '<br><span style="font-size:11px;color:var(--muted)">port ' + esc(u.ss_port) + '</span>' : ''))
         : '<span style="color:var(--muted);font-size:12px">' + esc(u.profile_error || '—') + '</span>';
       var canPrivateVpn = canUsePrivateVpn(u);
@@ -1813,7 +1880,8 @@ function renderUsers() {
           '<br>Last: ' + esc(u.last_ip || '—') + '<br>' + esc(u.ip_count || 0) + ' IP(s)</td>' +
         '<td>' + privateCell + '</td>' +
         '<td>' + subCell + '</td>' +
-        '<td><button class="btn btn-red btn-sm" onclick="confirmRevoke(&quot;' + esc(u.key) + '&quot;,&quot;' + esc(u.label || '') + '&quot;,&quot;' + esc(u.device || '') + '&quot;)">Revoke</button></td>' +
+        '<td><button class="btn btn-ghost btn-sm" style="margin-bottom:6px" onclick="copyRecoveryLink(&quot;' + esc(u.key) + '&quot;,this)">Recovery link</button><br>' +
+          '<button class="btn btn-red btn-sm" onclick="confirmRevoke(&quot;' + esc(u.key) + '&quot;,&quot;' + esc(u.label || '') + '&quot;,&quot;' + esc(u.device || '') + '&quot;)">Revoke</button></td>' +
       '</tr>';
     }).join('') + '</tbody></table></div>';
 }
@@ -2100,6 +2168,22 @@ async function revokeKey(kid) {
   }
 }
 
+async function copyRecoveryLink(kid, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    var r = await fetchT(API + '/api/admin/keys/' + encodeURIComponent(kid) + '/recovery-link', {
+      method: 'POST', headers: {'X-Root-Key': rootKey},
+    }, 8000);
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Could not create recovery link');
+    copyText(d.recovery_link, btn);
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function togglePrivateVpn(kid, enabled, btn) {
   if (btn) btn.disabled = true;
   try {
@@ -2110,7 +2194,7 @@ async function togglePrivateVpn(kid, enabled, btn) {
     }, 12000);
     var d = await r.json();
     if (!d.ok) {
-      alert(d.error || 'Private VPN update failed');
+      alert(d.error || 'MyNetwork update failed');
       if (btn) btn.disabled = false;
       return;
     }
@@ -2125,7 +2209,7 @@ async function togglePrivateVpn(kid, enabled, btn) {
 //  Restore session on page load (no re-login on refresh)
 // ══════════════════════════════════════════
 (function restoreSession() {
-  var savedKey, savedRoot, savedRequest;
+  var savedKey, savedRoot, savedRequest, hashRecovery;
   try {
     savedKey = localStorage.getItem('labvpn_key');
     savedRoot = localStorage.getItem('labvpn_root_key');
@@ -2135,6 +2219,10 @@ async function togglePrivateVpn(kid, enabled, btn) {
     savedRoot = null;
     savedRequest = null;
   }
+  try {
+    var hashMatch = location.hash.match(/^#recover=([A-Za-z0-9_-]+)$/);
+    hashRecovery = hashMatch ? hashMatch[1] : '';
+  } catch(e) { hashRecovery = ''; }
 
   if (savedRoot) {
     fetchT(API + '/api/admin/login', {
@@ -2150,28 +2238,45 @@ async function togglePrivateVpn(kid, enabled, btn) {
       .catch(function() { /* offline — keep saved root for next load */ });
   }
 
-  if (savedRequest) {
-    pollKeyRequest(savedRequest);
-    requestTimer = setInterval(function(){ pollKeyRequest(savedRequest); }, 3000);
-  }
-
-  if (savedKey) {
-    fetchT(API + '/api/validate-key', {headers: {'X-Verify-Key': savedKey}}, 6000)
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
+  (async function restoreUserSession() {
+    if (hashRecovery && await recoverStoredSession(hashRecovery)) {
+      try { history.replaceState(null, '', location.pathname + location.search); } catch(e) {}
+      goDash();
+      return;
+    }
+    if (savedKey) {
+      try {
+        var legacyResponse = await fetchT(API + '/api/validate-key', {
+          headers: {'X-Verify-Key': savedKey},
+        }, 6000);
+        var legacyData = await legacyResponse.json();
         try { localStorage.removeItem('labvpn_key'); } catch(e) {}
-        if (d.ok) { goDash(); }
-      })
-      .catch(function() {});
-    return;
-  }
-
-  fetchT(API + '/api/user/status', {}, 6000)
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.ok) { goDash(); renderStatus(d); }
-    })
-    .catch(function() { /* offline — leave on login screen */ });
+        if (legacyData.ok) {
+          rememberRecoveryToken(legacyData.recovery_token);
+          goDash();
+          return;
+        }
+      } catch(e) {}
+    }
+    try {
+      var cookieResponse = await fetchT(API + '/api/user/status', {}, 6000);
+      var cookieData = await cookieResponse.json();
+      if (cookieData.ok) {
+        rememberRecoveryToken(cookieData.recovery_token);
+        goDash();
+        renderStatus(cookieData);
+        return;
+      }
+    } catch(e) {}
+    if (await recoverStoredSession()) {
+      goDash();
+      return;
+    }
+    if (savedRequest) {
+      pollKeyRequest(savedRequest);
+      requestTimer = setInterval(function(){ pollKeyRequest(savedRequest); }, 3000);
+    }
+  })();
 })();
 </script>
 </body>

@@ -6,9 +6,9 @@
   "password": "CHANGE_ME_TO_A_RANDOM_PRIVATE_PASSWORD",
   "timeout": 300,
   "mode": "tcp_and_udp",
-  "profile_name": "SchoolVPN-PrivateVPN",
+  "profile_name": "MyNetwork",
   "keys": [
     "PUT-LONTION-MACBOOK-KEY-HERE"
   ],
-  "remarks": "Only keys listed here receive Clash profiles that use the private VPN outlet."
+  "remarks": "Only keys listed here receive Clash profiles that use the MyNetwork outlet."
 }

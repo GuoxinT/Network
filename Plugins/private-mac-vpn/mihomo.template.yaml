@@ -6,6 +6,20 @@ log-level: info
 ipv6: false
 external-controller: 0.0.0.0:9090
 
+authentication:
+  - "private-default:schoolvpn-private-route"
+  - "us01:schoolvpn-private-route"
+  - "us02:schoolvpn-private-route"
+  - "us03:schoolvpn-private-route"
+  - "us04:schoolvpn-private-route"
+  - "us05:schoolvpn-private-route"
+  - "us06:schoolvpn-private-route"
+  - "us07:schoolvpn-private-route"
+  - "us08:schoolvpn-private-route"
+  - "ashburn01:schoolvpn-private-route"
+  - "ashburn02:schoolvpn-private-route"
+  - "ashburn03:schoolvpn-private-route"
+
 profile:
   store-selected: true
   store-fake-ip: true
@@ -17,9 +31,14 @@ dns:
   listen: 127.0.0.1:1053
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
   nameserver:
-    - 1.1.1.1
-    - 8.8.8.8
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  nameserver-policy:
+    'gpu1.bucea.edu.cn': 10.1.4.10
 
 proxy-providers:
   private-subscription:
@@ -37,9 +56,101 @@ proxy-groups:
     type: select
     use:
       - private-subscription
-    filter: "美国01-0\\.1倍"
+    filter: '美国(0[1-8]|阿什本0[1-3])-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us01
+    type: select
+    use:
+      - private-subscription
+    filter: '美国01-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us02
+    type: select
+    use:
+      - private-subscription
+    filter: '美国02-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us03
+    type: select
+    use:
+      - private-subscription
+    filter: '美国03-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us04
+    type: select
+    use:
+      - private-subscription
+    filter: '美国04-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us05
+    type: select
+    use:
+      - private-subscription
+    filter: '美国05-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us06
+    type: select
+    use:
+      - private-subscription
+    filter: '美国06-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us07
+    type: select
+    use:
+      - private-subscription
+    filter: '美国07-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-us08
+    type: select
+    use:
+      - private-subscription
+    filter: '美国08-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-ashburn01
+    type: select
+    use:
+      - private-subscription
+    filter: '美国阿什本01-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-ashburn02
+    type: select
+    use:
+      - private-subscription
+    filter: '美国阿什本02-0\.1倍'
+    url: http://www.gstatic.com/generate_204
+    interval: 600
+  - name: ROUTE-ashburn03
+    type: select
+    use:
+      - private-subscription
+    filter: '美国阿什本03-0\.1倍'
     url: http://www.gstatic.com/generate_204
     interval: 600
 
 rules:
+  - DOMAIN,gpu1.bucea.edu.cn,DIRECT
+  - DOMAIN-SUFFIX,dash.xn--cp3a08l.com,DIRECT
+  - DOMAIN-SUFFIX,xn--cp3a08l.com,DIRECT
+  - IN-USER,us01,ROUTE-us01
+  - IN-USER,us02,ROUTE-us02
+  - IN-USER,us03,ROUTE-us03
+  - IN-USER,us04,ROUTE-us04
+  - IN-USER,us05,ROUTE-us05
+  - IN-USER,us06,ROUTE-us06
+  - IN-USER,us07,ROUTE-us07
+  - IN-USER,us08,ROUTE-us08
+  - IN-USER,ashburn01,ROUTE-ashburn01
+  - IN-USER,ashburn02,ROUTE-ashburn02
+  - IN-USER,ashburn03,ROUTE-ashburn03
+  - IN-USER,private-default,PRIVATE
   - MATCH,PRIVATE
